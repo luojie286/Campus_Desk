@@ -1,6 +1,6 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
-const {parseTsv,findIdentityRow,findHeaderRow,findHeaderRowByContent,findPartialIdentityRow,findReservedIdentity,buildGeneralPlan,openStore,assertWritePreconditions,changesMatch,approvalCheck,digest,placeholderIsPresent,reservationCellEmpty}=require('../src/core.cjs');
+const {parseTsv,findIdentityRow,findHeaderRow,findHeaderRowByContent,findPartialIdentityRow,findReservedIdentity,buildGeneralPlan,openStore,assertWritePreconditions,changesMatch,approvalCheck,digest,placeholderIsPresent,reservationCellEmpty,runBelongsToAccount}=require('../src/core.cjs');
 const {prepareColumnAnalysis,validateLlmMapping,analyzeColumns}=require('../src/llm.cjs');
 const p={name:'测试甲',student_id:'00123',sex:'男',age:'19',phone:'13800000000',major:'计算机科学与技术'};
 
@@ -14,6 +14,12 @@ test('profile fields: key-value fields merge legacy profile without overwriting 
   assert.equal(s.fields().name,'显式覆盖');
   assert.equal(s.listFields().some(item=>item.key==='phone'&&item.value_length===11),true);
   s.db.close();
+});
+test('account isolation: only runs under the active account can be approved or reanalyzed',()=>{
+  assert.equal(runBelongsToAccount({source_key:'7007:group:6318:m1'},'7007'),true);
+  assert.equal(runBelongsToAccount({source_key:'9000000005:group:6318:m1'},'7007'),false);
+  assert.equal(runBelongsToAccount({source_key:'manual:llm:1'},'7007'),false);
+  assert.equal(runBelongsToAccount({source_key:'7007:group:6318:m1'},''),false);
 });
 test('approval: requires awaiting state, matching digest, execute enabled and no busy executor',()=>{
   const plan={changes:[{row:3,col:3,field:'sex',value:'男'}]};

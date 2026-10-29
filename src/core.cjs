@@ -99,6 +99,10 @@ function eventKey(e) {
   if(e.message_id===undefined || e.self_id===undefined)throw Error('stable_message_id_missing');
   return [e.self_id,e.message_type,e.group_id??e.user_id,e.message_id].map(String).join(':');
 }
+// 只允许当前活动账号的来源记录被审批或重分析；旧账号/手动记录保持只读。
+function runBelongsToAccount(run,accountId) {
+  return !!accountId&&!!run&&typeof run.source_key==='string'&&run.source_key.startsWith(String(accountId)+':');
+}
 function digest(plan) {return crypto.createHash('sha256').update(JSON.stringify(plan)).digest('hex');}
 // 审批写入前的纯校验：状态、计划摘要、执行开关和串行执行器必须同时满足。
 function approvalCheck({state,digest,expectedDigest,execute,busy}) {
@@ -317,4 +321,5 @@ function changesMatch(plan,grid) {
 
 module.exports={canonicalUrl,extractLinks,sourceMatches,buildPlan,openStore,eventKey,digest,
   parseTsv,findIdentityRow,findHeaderRow,findHeaderRowByContent,findPartialIdentityRow,findReservedIdentity,
-  buildGeneralPlan,assertWritePreconditions,changesMatch,approvalCheck,placeholderIsPresent,reservationCellEmpty};
+  buildGeneralPlan,assertWritePreconditions,changesMatch,approvalCheck,placeholderIsPresent,reservationCellEmpty,
+  runBelongsToAccount};

@@ -1,15 +1,19 @@
 const fs=require('node:fs');
 const http=require('node:http');
 const crypto=require('node:crypto');
-const {openStore,extractLinks,sourceMatches,eventKey,canonicalUrl,findIdentityRow,findHeaderRow,findHeaderRowByContent,findPartialIdentityRow,findReservedIdentity,buildGeneralPlan,assertWritePreconditions,approvalCheck,digest,placeholderIsPresent,reservationCellEmpty}=require('./core.cjs');
+const path=require('node:path');
+const {openStore,extractLinks,sourceMatches,eventKey,canonicalUrl,findIdentityRow,findHeaderRow,findHeaderRowByContent,findPartialIdentityRow,findReservedIdentity,buildGeneralPlan,assertWritePreconditions,approvalCheck,digest,placeholderIsPresent,reservationCellEmpty,runBelongsToAccount}=require('./core.cjs');
 const {TencentSheet,column}=require('./tencent.cjs');
 const {prepareColumnAnalysis,analyzeColumns}=require('./llm.cjs');
+const {backupDatabase}=require('./db/backup.cjs');
+const {loadConfig}=require('./config.cjs');
 fs.mkdirSync('.private',{recursive:true});
 const configPath='.private/config.json';
 if(!fs.existsSync(configPath)){
   fs.writeFileSync(configPath,JSON.stringify({port:9087,token:crypto.randomBytes(32).toString('hex'),source:{type:'private',id:''},allowed_document:'https://docs.qq.com/sheet/EXAMPLE_DOCUMENT_2',max_rows:6,execute:false},null,2));
 }
-const config=JSON.parse(fs.readFileSync(configPath));
+// 允许首次运行的空来源配置；非法端口、令牌或来源类型会拒绝启动。
+const config=loadConfig(configPath,{allowUnconfigured:true});
 const store=openStore('.private/poc.sqlite');
 const command=process.argv[2]||'status';
 let busy=false;
@@ -57,13 +61,15 @@ async function reconcileGeneralRun(run){
 }
 async function processRun(run){
   // 旧账号未完成的记录保留，但不允许新账号执行或核对其写入。
-  if(!config.account_id || !run.source_key.startsWith(config.account_id+':'))return;
+  if(!runBelongsToAccount(run,config.account_id))return;
   if(run.state==='outcome_unknown'){await reconcileGeneralRun(run);return;}
   if(run.state!=='received')return;
   await prepareGeneralRun(run);
 }
 // 上层批准后写入：状态、摘要、execute 开关和串行执行器由调用方共同保证。
 async function approveRun(run,expectedDigest){
+  // 旧账号或手动记录不能通过 HTTP 审批写入。
+  if(!runBelongsToAccount(run,config.account_id))throw Error('account_mismatch');
   const plan=run.plan?JSON.parse(run.plan):null;
   if(!plan)throw Error('plan_missing');
   approvalCheck({state:run.state,digest:digest(plan),expectedDigest,execute:config.execute,busy:false});
@@ -370,6 +376,13 @@ async function main(){
     }
     await drain();console.log(JSON.stringify(store.summary(),null,2));
   }
+  else if(command==='backup'){
+    // 一致性副本写入 .private/backups，附 integrity 清单；不覆盖已有文件。
+    const stamp=new Date().toISOString().replace(/[:.]/g,'-');
+    const target=path.join('.private','backups','poc-'+stamp+'.sqlite');
+    const manifest=backupDatabase('.private/poc.sqlite',target);
+    console.log(JSON.stringify({stage:'backup_complete',target,size:manifest.size,sha256:manifest.sha256,integrity:manifest.integrity},null,2));
+  }
   else if(command==='serve'){
     store.recover();
     const setupNonce=crypto.randomBytes(20).toString('hex');
@@ -402,6 +415,7 @@ async function main(){
         if(!run)return respond(404,{error:'run_not_found'});
         if(req.method==='GET'&&!action)return respond(200,runPreview(run));
         if(req.method==='POST'&&action==='reanalyze'){
+          if(!runBelongsToAccount(run,config.account_id))return respond(403,{error:'account_mismatch'});
           if(['writing','outcome_unknown','completed'].includes(run.state))return respond(409,{error:'cannot_reanalyze_in_state_'+run.state});
           store.update(id,'received',null);
           setImmediate(()=>drain().catch(()=>{}));
@@ -417,7 +431,7 @@ async function main(){
             return respond(200,{status:'completed',id,changes:plan.changes.map(item=>({row:item.row,col:item.col,field:item.field}))});
           }catch(error){
             const message=String(error.message).split('\n')[0];
-            const status=message==='execute_disabled'?403:
+            const status=(message==='execute_disabled'||message==='account_mismatch')?403:
               ['busy','not_awaiting_approval','approval_digest_mismatch','plan_has_warnings','no_changes_to_write','identity_changed','target_changed'].includes(message)?409:500;
             return respond(status,{error:message});
           }finally{busy=false;}
