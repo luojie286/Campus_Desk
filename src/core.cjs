@@ -40,6 +40,7 @@ function openStore(file) {
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
     CREATE TABLE IF NOT EXISTS profile(id INTEGER PRIMARY KEY CHECK(id=1),name TEXT NOT NULL,student_id TEXT NOT NULL,sex TEXT NOT NULL,age INTEGER NOT NULL,provided_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS profile_fields(key TEXT PRIMARY KEY,value TEXT NOT NULL,source TEXT,updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS reservations(url TEXT NOT NULL,header_row INTEGER NOT NULL,"row" INTEGER NOT NULL,name_col INTEGER NOT NULL,student_col INTEGER NOT NULL,placeholder TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(url,"row"));
     CREATE TABLE IF NOT EXISTS runs(id INTEGER PRIMARY KEY,source_key TEXT NOT NULL,url TEXT NOT NULL,state TEXT NOT NULL,plan TEXT,error TEXT,updated_at TEXT NOT NULL,UNIQUE(source_key,url));`);
   return {
     db,
@@ -65,9 +66,32 @@ function openStore(file) {
     listFields(){
       return db.prepare('SELECT key,source,updated_at,length(value) AS value_length FROM profile_fields ORDER BY key').all();
     },
+    // 占位预约：记录某个表格中由本项目写入的占位行，后续分析和写入以它为目标。
+    saveReservation(r){
+      db.prepare('INSERT OR REPLACE INTO reservations(url,header_row,"row",name_col,student_col,placeholder,created_at) VALUES(?,?,?,?,?,?,?)')
+        .run(String(r.url),Number(r.header_row),Number(r.row),Number(r.name_col),Number(r.student_col),String(r.placeholder),new Date().toISOString());
+    },
+    reservationFor(url){
+      return db.prepare('SELECT * FROM reservations WHERE url=? ORDER BY created_at DESC LIMIT 1').get(String(url))||null;
+    },
+    clearReservation(url,row){
+      db.prepare('DELETE FROM reservations WHERE url=? AND "row"=?').run(String(url),Number(row));
+    },
+    // 放弃预约后，把指向同一行的待审批/缺身份记录标为 abandoned，避免继续审批。
+    abandonReservedRuns(url,row){
+      const candidates=db.prepare("SELECT id,plan FROM runs WHERE url=? AND state IN ('awaiting_approval','needs_identity')").all(String(url));
+      for(const candidate of candidates){
+        let plan=null;try{plan=JSON.parse(candidate.plan);}catch{}
+        if(!plan||plan.identityMode!=='reserved'||Number(plan.identityRow)!==Number(row))continue;
+        db.prepare("UPDATE runs SET state='abandoned',error='reservation_abandoned',updated_at=? WHERE id=?")
+          .run(new Date().toISOString(),candidate.id);
+      }
+    },
     enqueue(key,url){return db.prepare("INSERT OR IGNORE INTO runs(source_key,url,state,updated_at) VALUES(?,?,'received',?)").run(key,url,new Date().toISOString()).changes===1;},
+    get(id){return db.prepare('SELECT * FROM runs WHERE id=?').get(id)||null;},
     update(id,state,plan,error=null){db.prepare('UPDATE runs SET state=?,plan=COALESCE(?,plan),error=?,updated_at=? WHERE id=?').run(state,plan ? JSON.stringify(plan):null,error,new Date().toISOString(),id);},
-    recover(){db.exec("UPDATE runs SET state='outcome_unknown',error='interrupted_write' WHERE state='writing'; UPDATE runs SET state='received' WHERE state='prepared';");},
+    // 分析阶段只读，中断后可安全重试；写入阶段中断必须先核对，不能自动重试。
+    recover(){db.exec("UPDATE runs SET state='outcome_unknown',error='interrupted_write' WHERE state='writing'; UPDATE runs SET state='received',error=NULL WHERE state='prepared'; UPDATE runs SET state='received',error=NULL WHERE state='analyzing';");},
     summary(){return db.prepare('SELECT id,state,error,updated_at FROM runs ORDER BY id').all();}
   };
 }
@@ -76,6 +100,14 @@ function eventKey(e) {
   return [e.self_id,e.message_type,e.group_id??e.user_id,e.message_id].map(String).join(':');
 }
 function digest(plan) {return crypto.createHash('sha256').update(JSON.stringify(plan)).digest('hex');}
+// 审批写入前的纯校验：状态、计划摘要、执行开关和串行执行器必须同时满足。
+function approvalCheck({state,digest,expectedDigest,execute,busy}) {
+  if(busy)throw Error('busy');
+  if(state!=='awaiting_approval')throw Error('not_awaiting_approval');
+  if(!execute)throw Error('execute_disabled');
+  if(!digest||digest!==expectedDigest)throw Error('approval_digest_mismatch');
+  return true;
+}
 
 // 腾讯文档复制出来的区域是 TSV；单元格内的换行和制表符用双引号包裹。
 // 这里只做结构解析，不解释单元格含义，也不做任何写操作。
@@ -166,18 +198,48 @@ function findPartialIdentityRow(grid,profile,headerRow) {
   return candidates[0];
 }
 
+// 占位预约行：姓名单元格必须仍是我们写入的占位符，学号单元格仍为空。
+// 若占位符已被别人改动则报错，不猜测目标行。
+function findReservedIdentity(grid,profile,reservation) {
+  if(!reservation)return null;
+  const rowIndex=Number(reservation.row)-1;
+  const nameCol=Number(reservation.name_col)-1;
+  const studentCol=Number(reservation.student_col)-1;
+  const row=grid[rowIndex];
+  if(!row)return null;
+  if(text(row[nameCol])!==text(reservation.placeholder))throw Error('placeholder_changed');
+  if(text(row[studentCol])!=='')throw Error('reserved_student_cell_not_empty');
+  return {rowIndex,nameCol,studentCol,mode:'reserved',placeholder:text(reservation.placeholder)};
+}
+
+// 放弃预约时只允许清除仍等于我们占位符的单元格，绝不删除真实姓名或他人内容。
+function placeholderIsPresent(grid,reservation) {
+  if(!reservation)return false;
+  const row=grid[Number(reservation.row)-1];
+  if(!row)return false;
+  return text(row[Number(reservation.name_col)-1])===text(reservation.placeholder);
+}
+function reservationCellEmpty(grid,reservation) {
+  if(!reservation)return false;
+  const row=grid[Number(reservation.row)-1];
+  return !!row&&text(row[Number(reservation.name_col)-1])==='';
+}
+
 // 任意表头版本的填表计划：模型只提供“列 -> 本地字段 key”的映射，
 // 字段值和目标行由程序从本地数据库与已识别的本人行计算，模型不提供单元格值。
 function buildGeneralPlan({grid,identity,headerRow,mappings,fields}) {
   const header=grid[headerRow]||[];
   const ownRow=grid[identity.rowIndex]||[];
   const columns=[],changes=[],missing=[],warnings=[];const seenFields=new Set();
+  let hasNameMapping=false,hasStudentMapping=false;
   for(const mapping of mappings){
     const column=Number(mapping.column),field=mapping.field;
     if(!Number.isInteger(column)||column<1||column>header.length)throw Error('mapping_out_of_range');
     if(typeof field!=='string'||!Object.prototype.hasOwnProperty.call(fields,field))throw Error('unknown_profile_field');
     if(seenFields.has(field))throw Error('duplicate_field');
     seenFields.add(field);
+    if(field==='name')hasNameMapping=true;
+    if(field==='student_id')hasStudentMapping=true;
     // 身份列不能被映射成别的字段，别的列也不能冒充姓名或学号。
     if(column-1===identity.nameCol&&field!=='name')throw Error('identity_column_mismatch');
     if(column-1===identity.studentCol&&field!=='student_id')throw Error('identity_column_mismatch');
@@ -192,6 +254,15 @@ function buildGeneralPlan({grid,identity,headerRow,mappings,fields}) {
     }
     const before=text(ownRow[column-1]);
     const after=text(value);
+    // 预约行：姓名格里的占位符是允许被真实姓名替换的唯一例外。
+    if(identity.mode==='reserved'&&field==='name'){
+      const placeholder=text(identity.placeholder);
+      if(before!==placeholder)throw Error('placeholder_changed');
+      const change={row:identity.rowIndex+1,col:column,field,before:placeholder,value:after,replaces_placeholder:true};
+      changes.push(change);
+      if(/^[=+\-@]/.test(after))warnings.push({row:change.row,col:column,field,reason:'formula_like_value'});
+      continue;
+    }
     if(before!==''){
       if(before!==after)throw Error('existing_value_conflict');
       continue; // 已有值与数据库一致，不需要重复写。
@@ -201,10 +272,16 @@ function buildGeneralPlan({grid,identity,headerRow,mappings,fields}) {
     // 公式起始字符可能被平台当成公式执行；先标记，写入前必须单独处理。
     if(/^[=+\-@]/.test(after))warnings.push({row:change.row,col:column,field,reason:'formula_like_value'});
   }
+  // 预约行的姓名和学号必须由模型明确映射，否则占位符无法被替换、身份也不完整。
+  if(identity.mode==='reserved'){
+    if(!hasNameMapping)throw Error('name_mapping_missing');
+    if(!hasStudentMapping)throw Error('student_id_mapping_missing');
+  }
   return {
     headerRow:headerRow+1,
     identityRow:identity.rowIndex+1,
     identityMode:identity.mode||'full',
+    placeholder:identity.placeholder||null,
     nameCol:identity.nameCol+1,
     studentCol:identity.studentCol+1,
     columns,changes,missing,warnings
@@ -221,6 +298,11 @@ function assertWritePreconditions(plan,grid,profile) {
     const row=grid[plan.identityRow-1]||[];
     if(text(row[plan.nameCol-1])!==text(profile.name))throw Error('identity_changed');
     if(text(row[plan.studentCol-1])!=='')throw Error('identity_changed');
+  }else if(plan.identityMode==='reserved'){
+    // 预约行写入前：占位符仍在本行，学号单元格仍为空。
+    const row=grid[plan.identityRow-1]||[];
+    if(text(row[plan.nameCol-1])!==text(plan.placeholder))throw Error('identity_changed');
+    if(text(row[plan.studentCol-1])!=='')throw Error('identity_changed');
   }else throw Error('identity_changed');
   for(const change of plan.changes){
     const before=text(grid[change.row-1]?.[change.col-1]);
@@ -234,5 +316,5 @@ function changesMatch(plan,grid) {
 }
 
 module.exports={canonicalUrl,extractLinks,sourceMatches,buildPlan,openStore,eventKey,digest,
-  parseTsv,findIdentityRow,findHeaderRow,findHeaderRowByContent,findPartialIdentityRow,
-  buildGeneralPlan,assertWritePreconditions,changesMatch};
+  parseTsv,findIdentityRow,findHeaderRow,findHeaderRowByContent,findPartialIdentityRow,findReservedIdentity,
+  buildGeneralPlan,assertWritePreconditions,changesMatch,approvalCheck,placeholderIsPresent,reservationCellEmpty};

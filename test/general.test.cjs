@@ -1,8 +1,8 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
-const {parseTsv,findIdentityRow,findHeaderRow,findHeaderRowByContent,findPartialIdentityRow,buildGeneralPlan,openStore,assertWritePreconditions,changesMatch}=require('../src/core.cjs');
+const {parseTsv,findIdentityRow,findHeaderRow,findHeaderRowByContent,findPartialIdentityRow,findReservedIdentity,buildGeneralPlan,openStore,assertWritePreconditions,changesMatch,approvalCheck,digest,placeholderIsPresent,reservationCellEmpty}=require('../src/core.cjs');
 const {prepareColumnAnalysis,validateLlmMapping,analyzeColumns}=require('../src/llm.cjs');
-const p={name:'测试甲',student_id:'00123',sex:'男',age:'19',phone:'13800000000'};
+const p={name:'测试甲',student_id:'00123',sex:'男',age:'19',phone:'13800000000',major:'计算机科学与技术'};
 
 test('profile fields: key-value fields merge legacy profile without overwriting explicit values',()=>{
   const s=openStore(':memory:');s.saveProfile(p);
@@ -13,6 +13,24 @@ test('profile fields: key-value fields merge legacy profile without overwriting 
   s.setField('name','显式覆盖');
   assert.equal(s.fields().name,'显式覆盖');
   assert.equal(s.listFields().some(item=>item.key==='phone'&&item.value_length===11),true);
+  s.db.close();
+});
+test('approval: requires awaiting state, matching digest, execute enabled and no busy executor',()=>{
+  const plan={changes:[{row:3,col:3,field:'sex',value:'男'}]};
+  const d=digest(plan);
+  assert.equal(approvalCheck({state:'awaiting_approval',digest:d,expectedDigest:d,execute:true,busy:false}),true);
+  assert.throws(()=>approvalCheck({state:'completed',digest:d,expectedDigest:d,execute:true,busy:false}),/not_awaiting_approval/);
+  assert.throws(()=>approvalCheck({state:'awaiting_approval',digest:d,expectedDigest:d,execute:false,busy:false}),/execute_disabled/);
+  assert.throws(()=>approvalCheck({state:'awaiting_approval',digest:'x',expectedDigest:d,execute:true,busy:false}),/approval_digest_mismatch/);
+  assert.throws(()=>approvalCheck({state:'awaiting_approval',digest:d,expectedDigest:d,execute:true,busy:true}),/busy/);
+});
+test('database: get returns a run by id and recover requeues interrupted analysis',()=>{
+  const s=openStore(':memory:');
+  s.enqueue('source:1','https://docs.qq.com/sheet/abc');
+  assert.equal(s.get(1).state,'received');
+  s.db.prepare("UPDATE runs SET state='analyzing' WHERE id=1").run();
+  s.recover();
+  assert.equal(s.get(1).state,'received');
   s.db.close();
 });
 test('tsv: parse quoted tabs, newlines and escaped quotes, dropping trailing empty rows',()=>{
@@ -70,6 +88,55 @@ test('partial identity: unique name with an empty student-id cell is usable for 
   assert.deepEqual(plan.changes.map(item=>[item.row,item.col,item.field]),[[3,2,'age'],[3,3,'student_id'],[3,4,'sex']]);
   assert.equal(assertWritePreconditions(plan,grid,p),true);
   assert.throws(()=>findPartialIdentityRow([...grid,grid[2]],p,headerRow),/identity_not_unique/);
+});
+test('reserved row: placeholder is replaced by the real name and only that row is filled',()=>{
+  const grid=[
+    ['分区','姓名','学号','专业'],
+    ['网安楼','姓名（待补充）','',''],
+    ['网安楼','','','']
+  ];
+  const reservation={url:'https://docs.qq.com/sheet/x',header_row:1,row:2,name_col:2,student_col:3,placeholder:'姓名（待补充）'};
+  const identity=findReservedIdentity(grid,p,reservation);
+  assert.deepEqual(identity,{rowIndex:1,nameCol:1,studentCol:2,mode:'reserved',placeholder:'姓名（待补充）'});
+  const mappings=[{column:2,field:'name'},{column:3,field:'student_id'},{column:4,field:'major'}];
+  const plan=buildGeneralPlan({grid,identity,headerRow:0,mappings,fields:p});
+  assert.equal(plan.identityMode,'reserved');
+  assert.deepEqual(plan.changes.map(item=>[item.row,item.col,item.field,item.before,item.value]),[
+    [2,2,'name','姓名（待补充）','测试甲'],
+    [2,3,'student_id','','00123'],
+    [2,4,'major','','计算机科学与技术']
+  ]);
+  assert.equal(assertWritePreconditions(plan,grid,p),true);
+  const changed=[['分区','姓名','学号','专业'],['网安楼','别人','','']];
+  assert.throws(()=>findReservedIdentity(changed,p,reservation),/placeholder_changed/);
+  assert.throws(()=>buildGeneralPlan({grid,identity,headerRow:0,mappings:[{column:3,field:'student_id'},{column:4,field:'major'}],fields:p}),/name_mapping_missing/);
+});
+test('reservation cleanup: only clear a cell that still contains our placeholder',()=>{
+  const grid=[['分区','姓名','学号','专业'],['网安楼','姓名（待补充）','','']];
+  const r={row:2,name_col:2,placeholder:'姓名（待补充）'};
+  assert.equal(placeholderIsPresent(grid,r),true);
+  assert.equal(reservationCellEmpty(grid,r),false);
+  const cleared=[['分区','姓名','学号','专业'],['网安楼','','','']];
+  assert.equal(placeholderIsPresent(cleared,r),false);
+  assert.equal(reservationCellEmpty(cleared,r),true);
+  const renamed=[['分区','姓名','学号','专业'],['网安楼','示例学生','','']];
+  assert.equal(placeholderIsPresent(renamed,r),false);
+});
+test('reservations: abandoning marks matching awaiting runs abandoned',()=>{
+  const s=openStore(':memory:');
+  s.enqueue('source:1','https://docs.qq.com/sheet/x');
+  s.update(1,'awaiting_approval',{identityMode:'reserved',identityRow:2});
+  s.abandonReservedRuns('https://docs.qq.com/sheet/x',2);
+  assert.equal(s.get(1).state,'abandoned');
+  s.db.close();
+});
+test('reservations: save, look up by url and clear by url/row',()=>{
+  const s=openStore(':memory:');
+  s.saveReservation({url:'https://docs.qq.com/sheet/x',header_row:1,row:2,name_col:2,student_col:3,placeholder:'姓名（待补充）'});
+  assert.equal(s.reservationFor('https://docs.qq.com/sheet/x').row,2);
+  s.clearReservation('https://docs.qq.com/sheet/x',2);
+  assert.equal(s.reservationFor('https://docs.qq.com/sheet/x'),null);
+  s.db.close();
 });
 test('write preconditions: re-check identity and empty targets before any write',()=>{
   const grid=[['姓名','学号','性别'],['测试甲','00123','']];

@@ -94,6 +94,19 @@ class TencentSheet {
     throw Error('clipboard_empty');
   }
   async readCell(address){await this.select(address);return (await this.page.locator('#alloy-simple-text-editor').innerText()).trim();}
+  // 清除单元格：仅用于撤销本项目的占位符；调用方必须先确认当前值仍是占位符。
+  async clearCell(address){
+    await this.select(address);
+    const editor=this.page.locator('#alloy-simple-text-editor');
+    await editor.fill('');
+    await editor.press('Enter');
+    if((await this.readCell(address)).trim()==='')return true;
+    // 备用路径：部分页面版本需要真实 Delete 键才提交空值。
+    await this.select(address);
+    await this.page.keyboard.press('Delete');
+    await this.page.waitForTimeout(300);
+    return (await this.readCell(address)).trim()==='';
+  }
   async readTable(){
     const rows=[];
     // 限制为当前四列测试表，最多读取配置行数，不把任意复杂表当作已支持。

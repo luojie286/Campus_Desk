@@ -14,7 +14,8 @@ const FIELD_SYNONYMS={
   name:['姓名','名字','学生姓名'],
   student_id:['学号','学生编号','学籍号'],
   sex:['性别'],
-  age:['年龄']
+  age:['年龄'],
+  major:['专业','专业名称','就读专业']
 };
 
 function prepareColumnAnalysis({grid,identity,headerRow,fields}) {
