@@ -9,10 +9,13 @@ function createJobRepository(db){
         .run(String(type),JSON.stringify(payload||{}),runAt,Number(maxAttempts),runAt,runAt);
       return Number(info.lastInsertRowid);
     },
-    claim({workerId,leaseSeconds=60,now=nowIso()}){
+    claim({workerId,leaseSeconds=60,now=nowIso(),type=null}){
       db.exec('BEGIN IMMEDIATE');
       try{
-        const candidate=db.prepare("SELECT id FROM jobs WHERE state='queued' AND run_at<=? ORDER BY id LIMIT 1").get(now);
+        // worker 只领取自己负责的类型；否则 prepare_task 会被分类 worker 误领并失败。
+        const candidate=type
+          ? db.prepare("SELECT id FROM jobs WHERE state='queued' AND run_at<=? AND type=? ORDER BY id LIMIT 1").get(now,String(type))
+          : db.prepare("SELECT id FROM jobs WHERE state='queued' AND run_at<=? ORDER BY id LIMIT 1").get(now);
         if(!candidate){db.exec('COMMIT');return null;}
         const leaseExpires=new Date(new Date(now).getTime()+Number(leaseSeconds)*1000).toISOString();
         const updated=db.prepare(`UPDATE jobs SET state='running',lease_owner=?,lease_expires_at=?,

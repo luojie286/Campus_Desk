@@ -5,7 +5,7 @@ const {buildSuggestionPayload}=require('../suggest/llm.cjs');
 const {canonicalUrl}=require('../core.cjs');
 
 async function processNextClassifyJob({messages,suggestions,jobs,classifications,tasks,config,workerId,now=new Date().toISOString(),suggest}){
-  const job=jobs.claim({workerId,leaseSeconds:60,now});
+  const job=jobs.claim({workerId,leaseSeconds:60,now,type:'classify_message'});
   if(!job)return {processed:false};
   try{
     const payload=JSON.parse(job.payload_json||'{}');
@@ -46,9 +46,9 @@ async function processNextClassifyJob({messages,suggestions,jobs,classifications
           createdAt:now
         });
         createdTasks.push(task);
-        if(task.created)jobs.enqueue({type:'prepare_task',payload:{taskId:task.id},runAt:now});
+        if(task.created)jobs.enqueue({type:'prepare_task',payload:{taskId:task.id,accountRef:task.account_ref},runAt:now});
       }
-    }else if(shouldSuggest(classification.category)){
+    }else if(message.kind!=='file'&&shouldSuggest(classification.category)){
       // 聊天/文件总结才进入待办候选，由用户保留或忽略。
       if(typeof suggest!=='function')throw Error('suggest_function_required');
       const llmPayload=buildSuggestionPayload({

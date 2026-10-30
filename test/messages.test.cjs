@@ -70,6 +70,18 @@ test('suggestions: accept creates one todo, dismiss keeps the message and accoun
   assert.throws(()=>suggestions.accept({id:s1,accountRef:'9999',deviceId:'dev1'}),/suggestion_not_found/);
   store.db.close();
 });
+test('jobs: claim can be scoped to a job type',()=>{
+  const {jobs,store}=setup();
+  const prepareId=jobs.enqueue({type:'prepare_task',payload:{taskId:1},runAt:'2026-10-30T00:00:00.000Z'});
+  const classifyId=jobs.enqueue({type:'classify_message',payload:{messageId:1},runAt:'2026-10-30T00:00:00.000Z'});
+  const claimed=jobs.claim({workerId:'w1',type:'classify_message',leaseSeconds:60,now:'2026-10-30T00:00:01.000Z'});
+  assert.equal(claimed.id,classifyId);
+  assert.equal(claimed.type,'classify_message');
+  const prepare=jobs.claim({workerId:'w2',type:'prepare_task',leaseSeconds:60,now:'2026-10-30T00:00:01.000Z'});
+  assert.equal(prepare.id,prepareId);
+  assert.equal(prepare.type,'prepare_task');
+  store.db.close();
+});
 test('jobs: claim with lease, complete, retry and recover expired leases',()=>{
   const {jobs,store}=setup();
   const id=jobs.enqueue({type:'classify_message',payload:{messageId:1},runAt:'2026-10-30T00:00:00.000Z',maxAttempts:2});

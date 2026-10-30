@@ -312,6 +312,37 @@ const MIGRATIONS=[
           ON tasks(account_ref,request_key) WHERE request_key IS NOT NULL;
       `);
     }
+  },
+  {
+    version:3,
+    name:'message_files',
+    up(db){
+      // 附件只保存本地路径和提取状态；文件正文不进入普通消息 API。
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS message_files(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          message_id INTEGER NOT NULL,
+          account_ref TEXT NOT NULL,
+          platform_file_id TEXT NOT NULL,
+          file_name TEXT,
+          mime_type TEXT,
+          size_bytes INTEGER,
+          sha256 TEXT,
+          local_path TEXT,
+          download_state TEXT NOT NULL DEFAULT 'pending',
+          text_state TEXT NOT NULL DEFAULT 'pending',
+          text_path TEXT,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(message_id,platform_file_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_message_files_message
+          ON message_files(message_id);
+        CREATE INDEX IF NOT EXISTS idx_message_files_state
+          ON message_files(download_state,text_state);
+      `);
+    }
   }
 ];
 

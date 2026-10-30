@@ -76,6 +76,22 @@ function createMessageRepository(db){
       return db.prepare('SELECT * FROM messages WHERE id=? AND account_ref=?')
         .get(Number(id),String(accountRef))||null;
     },
+    // 左侧来源列表：按会话聚合未读数和最后一条消息，不返回 raw_json。
+    sources({accountRef}){
+      return db.prepare(`SELECT m.conversation_type,m.conversation_id,COUNT(*) AS total,
+        SUM(CASE WHEN m.read_at IS NULL THEN 1 ELSE 0 END) AS unread,
+        MAX(m.received_at) AS last_at,
+        (SELECT x.sender_id FROM messages x
+          WHERE x.account_ref=m.account_ref AND x.conversation_type=m.conversation_type AND x.conversation_id=m.conversation_id
+          ORDER BY x.received_at DESC,x.id DESC LIMIT 1) AS last_sender_id,
+        (SELECT x.content_text FROM messages x
+          WHERE x.account_ref=m.account_ref AND x.conversation_type=m.conversation_type AND x.conversation_id=m.conversation_id
+          ORDER BY x.received_at DESC,x.id DESC LIMIT 1) AS last_text
+        FROM messages m WHERE m.account_ref=?
+        GROUP BY m.conversation_type,m.conversation_id
+        ORDER BY last_at DESC`)
+        .all(String(accountRef));
+    },
     markRead({id,accountRef,readAt=new Date().toISOString()}){
       return db.prepare('UPDATE messages SET read_at=?,updated_at=? WHERE id=? AND account_ref=?')
         .run(readAt,readAt,Number(id),String(accountRef)).changes===1;

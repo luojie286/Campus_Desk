@@ -3,7 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "description": "Single-source QQ event to Tencent spreadsheet background proof of concept",
-  "engines": {"node": ">=24"},
-  "dependencies": {"playwright": "1.62.1"},
-  "scripts": {"start": "node src/poc.cjs serve", "test": "node --test test/*.test.cjs"}
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "pdf-parse": "2.4.5",
+    "playwright": "1.62.1"
+  },
+  "scripts": {
+    "start": "node src/poc.cjs serve",
+    "test": "node --test test/*.test.cjs",
+    "desktop:dev": "npm --prefix desktop run dev",
+    "desktop:build": "npm --prefix desktop run build",
+    "logs": "node tools/show-task-log.cjs"
+  }
 }

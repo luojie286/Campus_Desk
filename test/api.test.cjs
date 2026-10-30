@@ -5,6 +5,7 @@ const {openStore}=require('../src/core.cjs');
 const {applyMigrations}=require('../src/db/migrate.cjs');
 const {createMessageRepository}=require('../src/db/repositories/messages.cjs');
 const {createSuggestionRepository}=require('../src/db/repositories/suggestions.cjs');
+const {createFileRepository}=require('../src/db/repositories/files.cjs');
 const {createV2Handler}=require('../src/api/v2.cjs');
 
 const now='2026-10-30T06:00:00.000Z';
@@ -18,12 +19,14 @@ test('api: auth, message center, suggestions and todos',async()=>{
   applyMigrations(store.db);
   const messages=createMessageRepository(store.db);
   const suggestions=createSuggestionRepository(store.db);
+  const files=createFileRepository(store.db);
   const config={token:'test-token-123',account_id:'7007'};
   const message=messages.insert({...baseMessage,sourceMessageId:'m1',contentText:'请填写报名表',linkJson:'["https://docs.qq.com/sheet/abc"]'});
   const other=messages.insert({...baseMessage,sourceMessageId:'m2',contentText:'普通聊天',linkJson:'[]'});
+  files.insert({messageId:message.id,accountRef:'7007',platformFileId:'f1',fileName:'通知.pdf',mimeType:'application/pdf',sizeBytes:1200,createdAt:now});
   const acceptId=suggestions.insert({messageId:message.id,messageVersion:1,kind:'todo',title:'填写报名表',summary:'群内发布报名表',category:'form',confidence:0.9,actionJson:{links:['https://docs.qq.com/sheet/abc']},status:'pending',rationale:'含链接',model:'deepseek-chat',createdAt:now});
   const dismissId=suggestions.insert({messageId:other.id,messageVersion:1,kind:'todo',title:'普通聊天',summary:'无行动',category:'chat',confidence:0.2,actionJson:{},status:'pending',rationale:'无行动',model:'deepseek-chat',createdAt:now});
-  const handler=createV2Handler({messages,suggestions,config});
+  const handler=createV2Handler({messages,suggestions,files,config});
   const server=http.createServer(async(req,res)=>{
     const url=new URL(req.url,'http://127.0.0.1');
     const handled=await handler(req,res,url.pathname,url.searchParams);
@@ -49,9 +52,17 @@ test('api: auth, message center, suggestions and todos',async()=>{
     const first=list.body.items.find(item=>item.id===message.id);
     assert.equal(first.text,'请填写报名表');
     assert.deepEqual(first.links,['https://docs.qq.com/sheet/abc']);
+    assert.equal(first.files.length,1);
+    assert.equal(first.files[0].file_name,'通知.pdf');
     const detail=await call('/v1/messages/'+message.id,{headers:auth});
     assert.equal(detail.status,200);
     assert.equal(detail.body.suggestions.length,1);
+    assert.equal(detail.body.files[0].text_state,'pending');
+    const sources=await call('/v1/sources',{headers:auth});
+    assert.equal(sources.status,200);
+    assert.equal(sources.body.items.length,1);
+    assert.equal(sources.body.items[0].conversation_id,'6318');
+    assert.equal(sources.body.items[0].unread,2);
     const read=await call('/v1/messages/'+message.id,{method:'PATCH',headers:auth,body:JSON.stringify({read:true})});
     assert.equal(read.status,200);
     const unread=await call('/v1/messages?unread=1',{headers:auth});

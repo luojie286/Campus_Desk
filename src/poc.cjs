@@ -2,8 +2,9 @@ const fs=require('node:fs');
 const http=require('node:http');
 const crypto=require('node:crypto');
 const path=require('node:path');
-const {openStore,extractLinks,sourceMatches,eventKey,canonicalUrl,findIdentityRow,findHeaderRow,findHeaderRowByContent,findPartialIdentityRow,findReservedIdentity,buildGeneralPlan,assertWritePreconditions,approvalCheck,digest,placeholderIsPresent,reservationCellEmpty,runBelongsToAccount}=require('./core.cjs');
+const {openStore,extractLinks,sourceMatches,eventKey,canonicalUrl,findHeaderRowByContent,buildGeneralPlan,assertWritePreconditions,approvalCheck,digest,placeholderIsPresent,reservationCellEmpty,runBelongsToAccount}=require('./core.cjs');
 const {TencentSheet,column}=require('./tencent.cjs');
+const {resolveIdentity}=require('./documents/identity.cjs');
 const {prepareColumnAnalysis,analyzeColumns}=require('./llm.cjs');
 const {backupDatabase}=require('./db/backup.cjs');
 const {loadConfig}=require('./config.cjs');
@@ -13,8 +14,14 @@ const {createSuggestionRepository}=require('./db/repositories/suggestions.cjs');
 const {createTaskRepository}=require('./db/repositories/tasks.cjs');
 const {createJobRepository}=require('./db/repositories/jobs.cjs');
 const {createClassificationRepository}=require('./db/repositories/classifications.cjs');
+const {createFileRepository}=require('./db/repositories/files.cjs');
 const {ingestEvent}=require('./intake/onebot.cjs');
 const {processNextClassifyJob}=require('./worker/classify.cjs');
+const {processNextPrepareJob}=require('./worker/prepare.cjs');
+const {processNextExecuteJob}=require('./worker/execute.cjs');
+const {processNextFileJob}=require('./worker/file.cjs');
+const {downloadOneBotFile}=require('./files/onebot.cjs');
+const {extractPdfText}=require('./files/pdf.cjs');
 const {suggestFromMessage}=require('./suggest/llm.cjs');
 const {createV2Handler}=require('./api/v2.cjs');
 fs.mkdirSync('.private',{recursive:true});
@@ -32,7 +39,8 @@ const tasksRepo=createTaskRepository(store.db);
 const suggestionsRepo=createSuggestionRepository(store.db);
 const jobsRepo=createJobRepository(store.db);
 const classificationsRepo=createClassificationRepository(store.db);
-const v2Handler=createV2Handler({messages:messagesRepo,suggestions:suggestionsRepo,config});
+const filesRepo=createFileRepository(store.db);
+const v2Handler=createV2Handler({messages:messagesRepo,suggestions:suggestionsRepo,tasks:tasksRepo,jobs:jobsRepo,files:filesRepo,config});
 const command=process.argv[2]||'status';
 let busy=false;
 // 收到链接后的自动准备：读表、定位身份、调用 DeepSeek、生成计划。
@@ -138,12 +146,66 @@ async function drainClassifyJobs(){
     if(!result.processed)break;
   }
 }
+// 附件 worker：下载 PDF、提取文字、生成待办候选；不写表格。
+async function drainFileJobs(){
+  if(!config.messageCenter)return;
+  for(let i=0;i<2;i++){
+    const result=await processNextFileJob({
+      files:filesRepo,
+      messages:messagesRepo,
+      suggestions:suggestionsRepo,
+      jobs:jobsRepo,
+      config,
+      workerId,
+      now:new Date().toISOString(),
+      downloadFile:({fileId,fileName})=>downloadOneBotFile({fileId,fileName,config}),
+      extractText:buffer=>extractPdfText(buffer),
+      suggest:({payload})=>suggestFromMessage({payload,config}),
+      dir:'.private/files'
+    });
+    if(!result.processed)break;
+  }
+}
+// 文档任务准备只读表格并生成审批计划；执行写入仍由后续审批 worker 负责。
+async function drainPrepareJobs(){
+  if(!config.messageCenter)return;
+  for(let i=0;i<2;i++){
+    const result=await processNextPrepareJob({
+      tasks:tasksRepo,
+      jobs:jobsRepo,
+      config,
+      workerId,
+      now:new Date().toISOString(),
+      fields:()=>store.fields(),
+      reservationFor:url=>store.reservationFor(url),
+      createSheet:options=>new TencentSheet(options),
+      analyze:({payload})=>analyzeColumns({payload,config})
+    });
+    if(!result.processed)break;
+  }
+}
+// 审批后的写入只处理 execute_operation；写入异常由 worker 自己进入 outcome_unknown。
+async function drainExecuteJobs(){
+  if(!config.messageCenter)return;
+  for(let i=0;i<1;i++){
+    const result=await processNextExecuteJob({
+      tasks:tasksRepo,
+      jobs:jobsRepo,
+      config,
+      workerId,
+      now:new Date().toISOString(),
+      fields:()=>store.fields(),
+      createSheet:options=>new TencentSheet(options)
+    });
+    if(!result.processed)break;
+  }
+}
 function acceptEvent(e){
   if(!sourceMatches(e,config.source))return {accepted:0,reason:config.source.id?'source_filtered':'source_not_configured'};
   // 消息中心开启时先保存原文并排队分类/候选；这一步不打开浏览器。
   let ingested=null;
   if(config.messageCenter){
-    ingested=ingestEvent({event:e,config,messages:messagesRepo,jobs:jobsRepo});
+    ingested=ingestEvent({event:e,config,messages:messagesRepo,jobs:jobsRepo,files:filesRepo});
     if(ingested.reason==='source_filtered')return {accepted:0,reason:'source_filtered'};
     if(ingested.reason==='missing_stable_id')return {accepted:0,reason:'missing_stable_id'};
   }
@@ -195,21 +257,6 @@ async function clearReservationPlaceholder(sheet,target,reservation){
   store.clearReservation(target,reservation.row);
   store.abandonReservedRuns(target,reservation.row);
   return nameCell;
-}
-// 先找完整身份；找不到时再尝试“姓名唯一、学号单元格为空”的部分身份。
-// 部分身份会在预览中标为 name_only，必须由用户确认后才写入。
-function resolveIdentity(grid,profile,reservation){
-  // 预约行优先：占位符仍在本行时才使用，否则继续尝试完整/部分身份。
-  if(reservation){
-    const reserved=findReservedIdentity(grid,profile,reservation);
-    if(reserved)return {identity:reserved,headerRow:Number(reservation.header_row)-1,identityMode:'reserved'};
-  }
-  const full=findIdentityRow(grid,profile);
-  if(full)return {identity:full,headerRow:findHeaderRow(grid,full.rowIndex),identityMode:'full'};
-  const headerRow=findHeaderRowByContent(grid);
-  const partial=findPartialIdentityRow(grid,profile,headerRow);
-  if(!partial)return null;
-  return {identity:partial,headerRow,identityMode:'name_only'};
 }
 async function main(){
   if(command==='init-profile'){let data='';for await(const chunk of process.stdin)data+=chunk;const p=JSON.parse(data);if(!p.name||!p.student_id||!p.sex||!Number.isInteger(p.age))throw Error('invalid_profile');store.saveProfile(p);console.log('Profile stored in private SQLite database.');}
@@ -455,7 +502,7 @@ async function main(){
       if(req.method==='GET'&&req.url==='/health')return respond(200,{running:true,sourceConfigured:!!config.source.id,busy});
       const requestUrl=new URL(req.url||'/','http://127.0.0.1');
       const pathname=requestUrl.pathname;
-      if(pathname.startsWith('/v1/messages')||pathname.startsWith('/v1/suggestions')||pathname.startsWith('/v1/todos')){
+      if(pathname.startsWith('/v1/messages')||pathname.startsWith('/v1/suggestions')||pathname.startsWith('/v1/todos')||pathname.startsWith('/v1/tasks')||pathname==='/v1/sources'){
         const handled=await v2Handler(req,res,pathname,requestUrl.searchParams);
         if(handled)return;
       }
@@ -506,7 +553,12 @@ async function main(){
     });
     server.listen(config.port,'127.0.0.1',()=>console.log('Listening on http://127.0.0.1:'+config.port+'; POST /onebot'));
     setInterval(()=>drain().catch(()=>{}),2000).unref();
-    if(config.messageCenter)setInterval(()=>drainClassifyJobs().catch(()=>{}),2000).unref();
+    if(config.messageCenter){
+      setInterval(()=>drainClassifyJobs().catch(()=>{}),2000).unref();
+      setInterval(()=>drainFileJobs().catch(()=>{}),2000).unref();
+      setInterval(()=>drainPrepareJobs().catch(()=>{}),2000).unref();
+      setInterval(()=>drainExecuteJobs().catch(()=>{}),2000).unref();
+    }
   } else throw Error('unknown_command');
 }
 if(require.main===module)main().catch(e=>{console.error(String(e.message).split('\n')[0]);process.exitCode=1;});

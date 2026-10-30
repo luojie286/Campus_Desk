@@ -27,6 +27,16 @@ function setup(){
     tasks:createTaskRepository(store.db)
   };
 }
+test('worker: classification does not consume prepared-task jobs',async()=>{
+  const {store,messages,suggestions,jobs,classifications,tasks}=setup();
+  const prepareId=jobs.enqueue({type:'prepare_task',payload:{taskId:1},runAt:now,maxAttempts:1});
+  const result=await processNextClassifyJob({messages,suggestions,jobs,classifications,tasks,config:{},workerId:'w1',now});
+  assert.equal(result.processed,false);
+  const job=store.db.prepare('SELECT state,attempts FROM jobs WHERE id=?').get(prepareId);
+  assert.equal(job.state,'queued');
+  assert.equal(job.attempts,0);
+  store.db.close();
+});
 test('worker: short chat is classified without calling the suggestion model',async()=>{
   const {store,messages,suggestions,jobs,classifications,tasks}=setup();
   const msg=messages.insert({...base,sourceMessageId:'m1',contentText:'哈哈',linkJson:'[]'});

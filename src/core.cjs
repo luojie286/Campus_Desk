@@ -276,10 +276,10 @@ function buildGeneralPlan({grid,identity,headerRow,mappings,fields}) {
     // 公式起始字符可能被平台当成公式执行；先标记，写入前必须单独处理。
     if(/^[=+\-@]/.test(after))warnings.push({row:change.row,col:column,field,reason:'formula_like_value'});
   }
-  // 预约行的姓名和学号必须由模型明确映射，否则占位符无法被替换、身份也不完整。
-  if(identity.mode==='reserved'){
+  // 预约行必须替换占位符；新增行必须写入完整身份；仅学号匹配时至少要把姓名补上。
+  if(identity.mode==='reserved'||identity.mode==='new_row'||identity.mode==='student_id_only'){
     if(!hasNameMapping)throw Error('name_mapping_missing');
-    if(!hasStudentMapping)throw Error('student_id_mapping_missing');
+    if(identity.mode!=='student_id_only'&&!hasStudentMapping)throw Error('student_id_mapping_missing');
   }
   return {
     headerRow:headerRow+1,
@@ -297,6 +297,21 @@ function assertWritePreconditions(plan,grid,profile) {
   const identity=findIdentityRow(grid,profile);
   if(identity){
     if(identity.rowIndex+1!==plan.identityRow)throw Error('identity_changed');
+  }else if(plan.identityMode==='new_row'){
+    // 新增行只能在审批时的“最后一行之后”写入；如果中间有人插行，按原计划写会错位。
+    if(Number(plan.identityRow)!==grid.length+1)throw Error('target_row_changed');
+    const row=grid[plan.identityRow-1]||[];
+    if(row.some(value=>text(value)!==''))throw Error('target_row_not_empty');
+    const header=grid[plan.headerRow-1]||[];
+    for(const item of plan.columns||[]){
+      if(text(header[item.column-1])!==text(item.header))throw Error('header_changed');
+    }
+  }else if(plan.identityMode==='student_id_only'){
+    // 仅有学号定位时：学号必须仍匹配，姓名格必须为空或已经是本人。
+    const row=grid[plan.identityRow-1]||[];
+    if(text(row[plan.studentCol-1])!==text(profile.student_id))throw Error('identity_changed');
+    const name=text(row[plan.nameCol-1]);
+    if(name!==''&&name!==text(profile.name))throw Error('identity_changed');
   }else if(plan.identityMode==='name_only'){
     // 部分身份写入前：姓名仍在本行，且学号单元格仍为空。
     const row=grid[plan.identityRow-1]||[];

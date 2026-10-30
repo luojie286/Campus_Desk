@@ -24,6 +24,8 @@ function createTaskRepository(db){
       return {...db.prepare('SELECT * FROM tasks WHERE id=?').get(Number(info.lastInsertRowid)),created:true};
     },
     get({id,accountRef}){return getTask({id,accountRef});},
+    // 仅供 API 判断“任务存在但不属于当前账号”，用于返回 403 而不是把存在性伪装成 404。
+    getAny({id}){return db.prepare('SELECT * FROM tasks WHERE id=?').get(Number(id))||null;},
     list({accountRef,state=null,limit=100}){
       const params=[String(accountRef)];let where='account_ref=?';
       if(state){where+=' AND state=?';params.push(String(state));}
@@ -75,6 +77,17 @@ function createTaskRepository(db){
     answers({taskId,taskVersion}){
       return db.prepare('SELECT * FROM task_answers WHERE task_id=? AND task_version=? ORDER BY key')
         .all(Number(taskId),Number(taskVersion));
+    },
+    // 一个任务可能经历多轮问答；准备 worker 需要每个字段最新一次的回答。
+    latestAnswers({taskId}){
+      const rows=db.prepare('SELECT * FROM task_answers WHERE task_id=? ORDER BY task_version DESC,key')
+        .all(Number(taskId));
+      const seen=new Set();
+      return rows.filter(row=>{
+        if(seen.has(row.key))return false;
+        seen.add(row.key);
+        return true;
+      });
     },
     savePlan({taskId,plan,digest,preconditions=null,expiresAt=null,createdAt=nowIso()}){
       db.exec('BEGIN IMMEDIATE');
@@ -144,6 +157,71 @@ function createTaskRepository(db){
     getOperation({id,taskId}){
       return db.prepare('SELECT * FROM operations WHERE id=? AND task_id=?')
         .get(Number(id),Number(taskId))||null;
+    },
+    beginOperation({operationId,now=nowIso()}){
+      const operation=db.prepare('SELECT * FROM operations WHERE id=?').get(Number(operationId));
+      if(!operation)throw Error('operation_not_found');
+      if(operation.state==='completed'||operation.state==='unknown')return operation;
+      db.prepare(`UPDATE operations SET state='running',attempt=attempt+1,
+        started_at=COALESCE(started_at,?),error_class=NULL WHERE id=?`)
+        .run(now,Number(operationId));
+      return db.prepare('SELECT * FROM operations WHERE id=?').get(Number(operationId));
+    },
+    completeOperation({operationId,evidence=null,now=nowIso()}){
+      db.prepare(`UPDATE operations SET state='completed',evidence_json=?,finished_at=? WHERE id=?`)
+        .run(evidence===null?null:JSON.stringify(evidence),now,Number(operationId));
+      return db.prepare('SELECT * FROM operations WHERE id=?').get(Number(operationId));
+    },
+    failOperation({operationId,state='failed_retryable',errorClass=null,evidence=null,now=nowIso()}){
+      if(!['failed_retryable','unknown','failed_terminal'].includes(state))throw Error('invalid_operation_state');
+      db.prepare(`UPDATE operations SET state=?,error_class=?,evidence_json=?,finished_at=? WHERE id=?`)
+        .run(state,errorClass,evidence===null?null:JSON.stringify(evidence),now,Number(operationId));
+      return db.prepare('SELECT * FROM operations WHERE id=?').get(Number(operationId));
+    },
+    // 审批、操作入队和任务状态在同一个事务中完成；重复请求返回同一个操作。
+    approve({taskId,accountRef,planId,planVersion,planDigest,clientRequestId,actorDeviceId=null,createdAt=nowIso()}){
+      db.exec('BEGIN IMMEDIATE');
+      try{
+        const task=getTask({id:taskId,accountRef});
+        if(!task)throw Error('task_not_found');
+        if(!clientRequestId)throw Error('client_request_id_required');
+        const key=String(task.id)+':'+String(planId)+':fill';
+        const existingOperation=db.prepare('SELECT * FROM operations WHERE idempotency_key=?').get(key);
+        if(existingOperation){
+          const existingApproval=db.prepare('SELECT * FROM approvals WHERE task_id=? AND plan_id=? ORDER BY id DESC LIMIT 1')
+            .get(Number(task.id),Number(planId));
+          const current=getTask({id:task.id,accountRef});
+          db.exec('COMMIT');
+          return {created:false,task:current,approval:existingApproval,operation:existingOperation};
+        }
+        if(task.state!=='awaiting_approval')throw Error('invalid_transition_'+task.state+'_approve');
+        const plan=db.prepare('SELECT * FROM plans WHERE id=? AND task_id=?').get(Number(planId),Number(task.id));
+        if(!plan||plan.status!=='current'||String(plan.digest)!==String(planDigest)||Number(plan.version)!==Number(planVersion)){
+          throw Error('plan_not_current');
+        }
+        const approvalInfo=db.prepare(`INSERT INTO approvals
+          (task_id,plan_id,plan_version,plan_digest,decision,actor_device_id,client_request_id,created_at)
+          VALUES(?,?,?,?, 'approved',?,?,?)`)
+          .run(Number(task.id),Number(plan.id),Number(plan.version),String(plan.digest),
+            actorDeviceId,String(clientRequestId),createdAt);
+        const operationInfo=db.prepare(`INSERT INTO operations
+          (task_id,plan_id,kind,state,attempt,idempotency_key)
+          VALUES(?,?,'fill','queued',0,?)`)
+          .run(Number(task.id),Number(plan.id),key);
+        const next=transition(task.state,'approve');
+        const updated=db.prepare(`UPDATE tasks SET state=?,state_version=state_version+1,
+          updated_at=?,waiting_reason=NULL WHERE id=? AND state=? AND state_version=?`)
+          .run(next,createdAt,Number(task.id),task.state,task.state_version);
+        if(updated.changes!==1)throw Error('task_state_conflict');
+        const approval=db.prepare('SELECT * FROM approvals WHERE id=?').get(Number(approvalInfo.lastInsertRowid));
+        const operation=db.prepare('SELECT * FROM operations WHERE id=?').get(Number(operationInfo.lastInsertRowid));
+        const current=getTask({id:task.id,accountRef});
+        db.exec('COMMIT');
+        return {created:true,task:current,approval,operation};
+      }catch(error){
+        db.exec('ROLLBACK');
+        throw error;
+      }
     },
     acquireLock({lockKey,ownerId,taskId=null,operationId=null,ttlSeconds=60,now=nowIso()}){
       db.exec('BEGIN IMMEDIATE');

@@ -2,6 +2,18 @@
 // 这一层不打开浏览器、不调用文档执行器；是否生成候选由后续 worker 决定。
 const {sourceMatches,extractLinks,eventKey}=require('../core.cjs');
 
+function filePartsOf(rawMessage){
+  if(!Array.isArray(rawMessage))return [];
+  return rawMessage.filter(part=>part&&part.type==='file').map((part,index)=>{
+    const data=part.data||{};
+    return {
+      platformFileId:String(data.file_id||data.fileId||data.id||data.file||('file-'+index)),
+      fileName:data.file_name||data.name||data.file||null,
+      mimeType:data.mime_type||data.mimeType||null,
+      sizeBytes:Number.isFinite(Number(data.file_size||data.size))?Number(data.file_size||data.size):null
+    };
+  });
+}
 function normalizeOneBotEvent(event,config){
   if(!sourceMatches(event,config.source))return null;
   let eventId;
@@ -12,10 +24,12 @@ function normalizeOneBotEvent(event,config){
     ? rawMessage.filter(part=>part&&part.type==='text').map(part=>part.data?.text||'').join('')
     : String(rawMessage);
   const links=extractLinks(event);
+  const files=filePartsOf(rawMessage);
   const accountRef=config.account_id?String(config.account_id):String(event.self_id);
   return {
     eventId,
     links,
+    files,
     message:{
       platform:'qq',
       adapterInstance:config.adapter_instance||'onebot-main',
@@ -26,7 +40,7 @@ function normalizeOneBotEvent(event,config){
       sourceMessageId:String(event.message_id),
       sourceTime:event.time?new Date(Number(event.time)*1000).toISOString():null,
       receivedAt:new Date().toISOString(),
-      kind:'text',
+      kind:files.length?'file':'text',
       contentText:text,
       contentJson:JSON.stringify(rawMessage),
       linkJson:JSON.stringify(links),
@@ -37,10 +51,11 @@ function normalizeOneBotEvent(event,config){
   };
 }
 
-function ingestEvent({event,config,messages,jobs,now=new Date().toISOString()}){
+function ingestEvent({event,config,messages,jobs,files,now=new Date().toISOString()}){
   const normalized=normalizeOneBotEvent(event,config);
   if(!normalized)return {stored:false,reason:'source_filtered'};
   if(normalized.error)return {stored:false,reason:normalized.error};
+  if(normalized.files.length&&!files)throw Error('file_repository_required');
   const isNew=messages.insertInbound({
     adapterInstance:normalized.message.adapterInstance,
     eventId:normalized.eventId,
@@ -56,13 +71,32 @@ function ingestEvent({event,config,messages,jobs,now=new Date().toISOString()}){
       payload:{messageId:result.id,accountRef:normalized.message.accountRef},
       runAt:now
     });
+    for(const item of normalized.files){
+      const row=files.insert({
+        messageId:result.id,
+        accountRef:normalized.message.accountRef,
+        platformFileId:item.platformFileId,
+        fileName:item.fileName,
+        mimeType:item.mimeType,
+        sizeBytes:item.sizeBytes,
+        createdAt:now
+      });
+      jobs.enqueue({
+        type:'process_file',
+        payload:{fileId:row.id,messageId:result.id,accountRef:normalized.message.accountRef},
+        runAt:now
+      });
+    }
   }
   return {
     stored:true,
     duplicate:false,
     messageId:result.id,
     inserted:result.inserted,
-    links:normalized.links
+    links:normalized.links,
+    fileIds:result.inserted&&files
+      ? files.listForMessage({messageId:result.id,accountRef:normalized.message.accountRef}).map(row=>row.id)
+      : []
   };
 }
 

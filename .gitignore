@@ -1,3 +1,5 @@
 .private/
 node_modules/
+desktop/dist/
+*.tsbuildinfo
 *.log
