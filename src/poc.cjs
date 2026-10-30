@@ -489,6 +489,16 @@ async function main(){
     fs.writeFileSync('.private/setup-url.txt','http://127.0.0.1:'+config.port+setupBase);
     const server=http.createServer(async(req,res)=>{
       res.setHeader('Content-Type','application/json');
+      // Tauri 2 的 WebView 与开发浏览器需要明确允许的本机来源；令牌仍然必需。
+      const origin=req.headers.origin;
+      const allowedOrigins=new Set(['http://localhost:5173','http://127.0.0.1:5173','http://tauri.localhost','https://tauri.localhost','tauri://localhost']);
+      if(origin&&allowedOrigins.has(origin)){
+        res.setHeader('Access-Control-Allow-Origin',origin);
+        res.setHeader('Vary','Origin');
+        res.setHeader('Access-Control-Allow-Headers','Authorization, Content-Type');
+        res.setHeader('Access-Control-Allow-Methods','GET, POST, PATCH, OPTIONS');
+      }
+      if(req.method==='OPTIONS'){res.statusCode=204;res.end();return;}
       const respond=(status,data)=>{res.statusCode=status;res.end(JSON.stringify(data));};
       if(req.method==='GET'&&req.url?.split('?')[0]===setupBase+'/qr.png'){
         const qr='.private/vendor/napcat-4.18.41/cache/qrcode.png';

@@ -1,6 +1,6 @@
 # 课桌桌面端
 
-消息中心与文档填写审批的桌面工作台。当前交付的是可运行的 **React + TypeScript + Vite Web MVP**；Tauri 2 原生壳等本机安装 Rust/MSVC 后再接入，页面和 API 客户端不需要重写。
+消息中心与文档填写审批的桌面工作台。当前包含 **React + TypeScript + Vite Web MVP** 和 **Tauri 2 Windows 原生壳**；原生壳使用 Windows Credential Manager 保存访问令牌，不再依赖浏览器 localStorage。
 
 窄屏响应式样式只是桌面窗口缩小时的 Web 预览，不是手机端交付。手机端按计划是独立的 Android 原生 App（Kotlin/Compose），不会复用这个网页作为最终客户端。
 
@@ -20,11 +20,20 @@ npm start
 
 打开页面后进入“连接设置”，填入后台服务地址与访问令牌。令牌来自本机 `.private/config.json`，不要提交到 Git 或发给别人。
 
-生产构建：
+Web 生产构建：
 
 ```powershell
 npm run build
 ```
+
+Tauri 原生开发/构建（需要 Rust MSVC 工具链和 WebView2）：
+
+```powershell
+npm run tauri:dev
+npm run tauri:build
+```
+
+Tauri 构建产物在 `src-tauri/target/release/` 下；首次编译需要下载并编译 Rust 依赖，时间较长。
 
 ## 第一版范围
 
@@ -38,14 +47,12 @@ npm run build
 ## 隐私与凭据
 
 - 消息、附件和审批保存在本机 SQLite；页面不接触浏览器会话或腾讯账号。
-- 开发版把令牌放在浏览器 `localStorage`，只适合本机。Tauri 版本应改用系统安全存储（Windows Credential Manager/Stronghold）。
+- 浏览器开发版把令牌放在 `localStorage`，只适合本机。
+- Tauri 版通过 Rust `keyring` 写入 Windows Credential Manager，前端只保留内存中的令牌；设置页保存/清除令牌会调用原生命令。
 - 页面不硬编码用户、群、文档 URL、平台或执行器；来源、计划和问题都由 API 返回。
 
-## Tauri 接入待办
+## Tauri 壳
 
-本机尚未安装 Rust/Cargo，因此没有生成 `src-tauri/`。安装 Rust 和 MSVC Build Tools 后：
+`src-tauri/` 已包含 Tauri 2 窗口、Windows Credential Manager 令牌存储和默认 capability。后端只对 `localhost:5173`、`127.0.0.1:5173` 与 Tauri 本机来源放行 CORS，接口仍需 Bearer 令牌。
 
-1. 在 `desktop/` 初始化 Tauri 2 工程。
-2. 将令牌从 `localStorage` 迁移到系统安全存储。
-3. 用 Tauri HTTP 插件或本机代理访问 `127.0.0.1:9087`，避免浏览器 CORS 限制。
-4. 配置 Windows 安装包、系统通知和崩溃恢复。
+仍待完善：Windows 安装包图标/签名、系统通知、开机自启和崩溃恢复。

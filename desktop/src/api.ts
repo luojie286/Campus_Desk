@@ -1,4 +1,5 @@
 import type {Message, Operation, Plan, SourceRow, Suggestion, Task, Todo} from './types';
+import {currentToken, initializeToken, isTauriApp, persistToken, removeToken} from './secure';
 
 const DEFAULT_BASE = '/api';
 
@@ -13,20 +14,31 @@ export class ApiError extends Error {
   }
 }
 
+function normalizeBase(base: string) {
+  const value = base.trim();
+  if (isTauriApp() && (!value || value === '/api')) return 'http://127.0.0.1:9087';
+  return value || DEFAULT_BASE;
+}
+
 export function readCredentials() {
   return {
-    base: localStorage.getItem('desk.apiBase') || DEFAULT_BASE,
-    token: localStorage.getItem('desk.apiToken') || ''
+    base: normalizeBase(localStorage.getItem('desk.apiBase') || ''),
+    token: currentToken()
   };
 }
 
-export function saveCredentials(base: string, token: string) {
-  localStorage.setItem('desk.apiBase', base.trim() || DEFAULT_BASE);
-  localStorage.setItem('desk.apiToken', token.trim());
+export async function initializeCredentials() {
+  await initializeToken();
+  return readCredentials();
 }
 
-export function clearToken() {
-  localStorage.removeItem('desk.apiToken');
+export async function saveCredentials(base: string, token: string) {
+  localStorage.setItem('desk.apiBase', normalizeBase(base));
+  await persistToken(token.trim());
+}
+
+export async function clearToken() {
+  await removeToken();
 }
 
 function baseUrl() {

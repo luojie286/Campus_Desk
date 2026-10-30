@@ -176,6 +176,14 @@ function App() {
   }, []);
 
   useEffect(() => {
+    api.initializeCredentials().then(next => {
+      setCredentials(next);
+      setBaseDraft(next.base);
+      setTokenDraft(next.token);
+    }).catch(caught => setError(errorText(caught)));
+  }, []);
+
+  useEffect(() => {
     refresh();
     if (!hasToken) return;
     const timer = window.setInterval(refresh, REFRESH_MS);
@@ -285,14 +293,18 @@ function App() {
     setSelectedTaskId(null);
   }
 
-  function saveLogin(event: FormEvent) {
+  async function saveLogin(event: FormEvent) {
     event.preventDefault();
-    api.saveCredentials(baseDraft, tokenDraft);
-    const next = api.readCredentials();
-    setCredentials(next);
-    setError('');
-    setNotice('连接设置已保存。');
-    refresh();
+    try {
+      await api.saveCredentials(baseDraft, tokenDraft);
+      const next = api.readCredentials();
+      setCredentials(next);
+      setError('');
+      setNotice('连接设置已保存。');
+      refresh();
+    } catch (caught) {
+      setError(errorText(caught));
+    }
   }
 
   async function testHealth() {
@@ -310,13 +322,17 @@ function App() {
     }
   }
 
-  function forgetToken() {
-    api.clearToken();
-    const next = api.readCredentials();
-    setCredentials(next);
-    setTokenDraft('');
-    setHealth('unknown');
-    setNotice('访问令牌已清除。');
+  async function forgetToken() {
+    try {
+      await api.clearToken();
+      const next = api.readCredentials();
+      setCredentials(next);
+      setTokenDraft('');
+      setHealth('unknown');
+      setNotice('访问令牌已清除。');
+    } catch (caught) {
+      setError(errorText(caught));
+    }
   }
 
   const viewMeta = {
