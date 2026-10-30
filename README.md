@@ -21,7 +21,7 @@ npm test                  # 后端测试
 npm run desktop:build     # 桌面构建
 ```
 
-桌面端说明见 [desktop/README.md](desktop/README.md)。Tauri 原生壳需要本机安装 Rust/MSVC，当前尚未生成。
+桌面端说明见 [desktop/README.md](desktop/README.md)：包含 React/Vite Web MVP 和 Tauri 2 Windows 壳；Tauri 使用 Windows Credential Manager 保存访问令牌。
 
 ## 文档导航
 
@@ -36,9 +36,10 @@ npm run desktop:build     # 桌面构建
 - [后台技术设计](docs/backend-design.md)：2026-10-29 修订，含后台接入、数据契约、任务恢复、App API 和平台验证门槛。
 - [术语表](CONTEXT.md)：已统一的业务词汇。
 - [2026-10-29 技术验证记录](docs/verification/2026-10-29.md)：实际执行结果及等待条件；与文档研究结论分开记录。
+- [2026-10-30 真实消息与审批验证](docs/verification/2026-10-30.md)：群消息、PDF 提取、仅学号匹配、审批写入和回读证据。
 
 ## 当前结论
 
-指定 QQ 好友历史消息到腾讯在线表格的真实后台闭环已通过；本地模拟、单元测试和界面点击不作为同一结论的证据。实时新消息回调、真实 PDF 和群聊需另行验证。
+2026-10-30 已完成真实群消息验收：指定 QQ 群消息经 NapCat HTTP 进入后台；真实 PDF 完成下载、文字提取和待办候选；真实腾讯文档完成“任务 → 计划 → 审批 → 写入 → 回读”，包括仅学号匹配和新增行两种身份模式。验证记录只保留任务号、状态和脱敏后的字段数量，不记录真实姓名、学号或文档内容。
 
-下一步是真实平台验收：在群聊发送一条真实腾讯文档链接和一份真实 PDF，分别确认“任务 → 计划 → 审批 → 写入 → 回读”和“下载 → 提取 → 候选”；通过后再决定是否把配置的 `pipeline` 从 `legacy` 切到 `v2`。当前配置仍保留 `legacy` 管道，避免新旧路径同时产生重复记录。安卓客户端和 Tauri 原生壳在真实验收后排期。
+真实消息验证通过后，配置已切到 `v2`，避免同一文档链接同时产生旧 run 和新任务。Tauri 2 Windows 壳已生成并通过启动检查，令牌改存 Windows Credential Manager；Android 原生端仍待完成。
