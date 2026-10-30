@@ -25,7 +25,9 @@ test('config: rejects invalid port, source, token and account identifiers',()=>{
     [{...base,source:{type:'group',id:'6318'}},'source_sender_missing'],
     [{...base,source:{type:'private',id:''}},'source_id_missing'],
     [{...base,source:{type:'chat',id:'1'}},'source_type_invalid'],
-    [{...base,account_id:'abc'},'account_id_invalid']
+    [{...base,account_id:'abc'},'account_id_invalid'],
+    [{...base,messageCenter:'yes'},'messageCenter_invalid'],
+    [{...base,pipeline:'v3'},'pipeline_invalid']
   ];
   for(const [config,code] of cases){
     const result=validateConfig(config);

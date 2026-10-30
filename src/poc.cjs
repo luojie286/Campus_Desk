@@ -7,6 +7,16 @@ const {TencentSheet,column}=require('./tencent.cjs');
 const {prepareColumnAnalysis,analyzeColumns}=require('./llm.cjs');
 const {backupDatabase}=require('./db/backup.cjs');
 const {loadConfig}=require('./config.cjs');
+const {applyMigrations}=require('./db/migrate.cjs');
+const {createMessageRepository}=require('./db/repositories/messages.cjs');
+const {createSuggestionRepository}=require('./db/repositories/suggestions.cjs');
+const {createTaskRepository}=require('./db/repositories/tasks.cjs');
+const {createJobRepository}=require('./db/repositories/jobs.cjs');
+const {createClassificationRepository}=require('./db/repositories/classifications.cjs');
+const {ingestEvent}=require('./intake/onebot.cjs');
+const {processNextClassifyJob}=require('./worker/classify.cjs');
+const {suggestFromMessage}=require('./suggest/llm.cjs');
+const {createV2Handler}=require('./api/v2.cjs');
 fs.mkdirSync('.private',{recursive:true});
 const configPath='.private/config.json';
 if(!fs.existsSync(configPath)){
@@ -15,6 +25,14 @@ if(!fs.existsSync(configPath)){
 // 允许首次运行的空来源配置；非法端口、令牌或来源类型会拒绝启动。
 const config=loadConfig(configPath,{allowUnconfigured:true});
 const store=openStore('.private/poc.sqlite');
+// 增量迁移只新增 v2 表，不修改旧 profile/runs/reservations；每个进程启动时幂等执行。
+applyMigrations(store.db);
+const messagesRepo=createMessageRepository(store.db);
+const tasksRepo=createTaskRepository(store.db);
+const suggestionsRepo=createSuggestionRepository(store.db);
+const jobsRepo=createJobRepository(store.db);
+const classificationsRepo=createClassificationRepository(store.db);
+const v2Handler=createV2Handler({messages:messagesRepo,suggestions:suggestionsRepo,config});
 const command=process.argv[2]||'status';
 let busy=false;
 // 收到链接后的自动准备：读表、定位身份、调用 DeepSeek、生成计划。
@@ -101,13 +119,46 @@ async function drain(){
   if(busy)return;busy=true;
   try{for(const run of store.db.prepare("SELECT * FROM runs WHERE state='received' ORDER BY id").all())await processRun(run);}finally{busy=false;}
 }
+// 分类/候选 worker 只处理消息和候选，不打开浏览器；每个 tick 最多处理三条。
+const workerId='serve-'+process.pid;
+async function drainClassifyJobs(){
+  if(!config.messageCenter)return;
+  for(let i=0;i<3;i++){
+    const result=await processNextClassifyJob({
+      messages:messagesRepo,
+      suggestions:suggestionsRepo,
+      jobs:jobsRepo,
+      classifications:classificationsRepo,
+      tasks:tasksRepo,
+      config,
+      workerId,
+      now:new Date().toISOString(),
+      suggest:({payload})=>suggestFromMessage({payload,config})
+    });
+    if(!result.processed)break;
+  }
+}
 function acceptEvent(e){
   if(!sourceMatches(e,config.source))return {accepted:0,reason:config.source.id?'source_filtered':'source_not_configured'};
-  // 来源已由稳定群/成员 ID 过滤；域名和 sheet 路径由 extractLinks/canonicalUrl 限制。
-  // 不再要求链接等于单个白名单文档，任意腾讯在线表格链接都先入库等待分析。
-  const key=eventKey(e);let accepted=0;
-  for(const url of extractLinks(e))accepted+=Number(store.enqueue(key,url));
-  return {accepted};
+  // 消息中心开启时先保存原文并排队分类/候选；这一步不打开浏览器。
+  let ingested=null;
+  if(config.messageCenter){
+    ingested=ingestEvent({event:e,config,messages:messagesRepo,jobs:jobsRepo});
+    if(ingested.reason==='source_filtered')return {accepted:0,reason:'source_filtered'};
+    if(ingested.reason==='missing_stable_id')return {accepted:0,reason:'missing_stable_id'};
+  }
+  // legacy 管道保留现有自动填表行为；v2 管道只存消息和候选，等用户确认待办。
+  let accepted=0;
+  if(config.pipeline!=='v2'){
+    const key=eventKey(e);
+    for(const url of extractLinks(e))accepted+=Number(store.enqueue(key,url));
+  }
+  return {
+    accepted,
+    stored:ingested?!!ingested.stored:null,
+    messageId:ingested?.messageId??null,
+    duplicate:ingested?!!ingested.duplicate:null
+  };
 }
 // 手动/LLM 写入也留一条 runs 记录；source_key 以 manual: 开头，
 // 后台 serve 不会自动重试它，结果不明时必须人工回读。
@@ -385,6 +436,7 @@ async function main(){
   }
   else if(command==='serve'){
     store.recover();
+    jobsRepo.recoverExpired(new Date().toISOString());
     const setupNonce=crypto.randomBytes(20).toString('hex');
     const setupBase='/setup/'+setupNonce;
     fs.writeFileSync('.private/setup-url.txt','http://127.0.0.1:'+config.port+setupBase);
@@ -401,7 +453,12 @@ async function main(){
         res.end(`<!doctype html><meta charset="utf-8"><title>QQ 后台登录</title><h2>手机 QQ 扫码登录后台适配器</h2><p>此二维码每三秒刷新显示；请扫码并在手机确认。</p><img id="qr" width="300" height="300" src="${setupBase}/qr.png"><p>这是本机后台适配器的二维码。腾讯文档需在专用 Edge 中另行登录。</p><script>setInterval(()=>document.getElementById('qr').src='${setupBase}/qr.png?t='+Date.now(),3000)</script>`);return;
       }
       if(req.method==='GET'&&req.url==='/health')return respond(200,{running:true,sourceConfigured:!!config.source.id,busy});
-      const pathname=new URL(req.url||'/','http://127.0.0.1').pathname;
+      const requestUrl=new URL(req.url||'/','http://127.0.0.1');
+      const pathname=requestUrl.pathname;
+      if(pathname.startsWith('/v1/messages')||pathname.startsWith('/v1/suggestions')||pathname.startsWith('/v1/todos')){
+        const handled=await v2Handler(req,res,pathname,requestUrl.searchParams);
+        if(handled)return;
+      }
       if(pathname.startsWith('/v1/')){
         if(!apiAuthorized(req))return respond(401,{error:'unauthorized'});
         if(req.method==='GET'&&pathname==='/v1/runs'){
@@ -449,6 +506,7 @@ async function main(){
     });
     server.listen(config.port,'127.0.0.1',()=>console.log('Listening on http://127.0.0.1:'+config.port+'; POST /onebot'));
     setInterval(()=>drain().catch(()=>{}),2000).unref();
+    if(config.messageCenter)setInterval(()=>drainClassifyJobs().catch(()=>{}),2000).unref();
   } else throw Error('unknown_command');
 }
 if(require.main===module)main().catch(e=>{console.error(String(e.message).split('\n')[0]);process.exitCode=1;});

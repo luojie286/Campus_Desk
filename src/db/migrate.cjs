@@ -300,6 +300,18 @@ const MIGRATIONS=[
         CREATE INDEX IF NOT EXISTS idx_jobs_state_run ON jobs(state,run_at);
       `);
     }
+  },
+  {
+    version:2,
+    name:'task_request_key',
+    up(db){
+      // 文档链接直接派生任务，不经过 todo；request_key 用于按消息+文档去重。
+      db.exec(`
+        ALTER TABLE tasks ADD COLUMN request_key TEXT;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_request
+          ON tasks(account_ref,request_key) WHERE request_key IS NOT NULL;
+      `);
+    }
   }
 ];
 

@@ -8,6 +8,8 @@ function validateConfig(config,{allowUnconfigured=false}={}) {
   if(!Number.isInteger(config.port)||config.port<1||config.port>65535)errors.push('port_invalid');
   if(typeof config.token!=='string'||config.token.length<MIN_TOKEN_LENGTH)errors.push('token_invalid');
   if(typeof config.execute!=='boolean')errors.push('execute_invalid');
+  if(config.messageCenter!==undefined&&typeof config.messageCenter!=='boolean')errors.push('messageCenter_invalid');
+  if(config.pipeline!==undefined&&!['legacy','v2'].includes(config.pipeline))errors.push('pipeline_invalid');
   if(config.account_id!==undefined&&config.account_id!==null&&config.account_id!==''&&!/^\d+$/.test(String(config.account_id))){
     errors.push('account_id_invalid');
   }
