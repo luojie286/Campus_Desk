@@ -37,17 +37,19 @@ test('worker: classification does not consume prepared-task jobs',async()=>{
   assert.equal(job.attempts,0);
   store.db.close();
 });
-test('worker: short chat is classified without calling the suggestion model',async()=>{
+test('worker: non-link chat is queued for conversation filtering, not per-message LLM',async()=>{
   const {store,messages,suggestions,jobs,classifications,tasks}=setup();
   const msg=messages.insert({...base,sourceMessageId:'m1',contentText:'哈哈',linkJson:'[]'});
   jobs.enqueue({type:'classify_message',payload:{messageId:msg.id,accountRef:'7007'},runAt:now,maxAttempts:1});
-  let called=0;
-  const result=await processNextClassifyJob({messages,suggestions,jobs,classifications,tasks,config:{},workerId:'w1',now,
-    suggest:async()=>{called++;return {actionable:true,title:'x',summary:'',category:'chat',confidence:0.9};}});
+  const result=await processNextClassifyJob({messages,suggestions,jobs,classifications,tasks,config:{},workerId:'w1',now});
   assert.equal(result.processed,true);
   assert.equal(result.classification.category,'chat');
-  assert.equal(called,0);
   assert.equal(suggestions.list({accountRef:'7007',status:'pending'}).length,0);
+  const queued=store.db.prepare("SELECT * FROM jobs WHERE type='suggest_conversation'").all();
+  assert.equal(queued.length,1);
+  assert.equal(queued[0].state,'queued');
+  assert.equal(JSON.parse(queued[0].payload_json).conversationId,'6318');
+  assert.equal(queued[0].run_at,'2026-10-30T05:00:30.000Z');
   assert.equal(store.db.prepare("SELECT state FROM jobs WHERE id=?").get(result.jobId).state,'done');
   store.db.close();
 });
@@ -71,17 +73,16 @@ test('worker: document link creates a fill task directly and enqueues preparatio
   assert.equal(store.db.prepare("SELECT state FROM jobs WHERE id=?").get(result.jobId).state,'done');
   store.db.close();
 });
-test('worker: negative suggestion decision stores no candidate; missing message fails the job',async()=>{
+test('worker: non-link messages are aggregated and a missing message fails the job',async()=>{
   const {store,messages,suggestions,jobs,classifications,tasks}=setup();
   const msg=messages.insert({...base,sourceMessageId:'m3',contentText:'请提交材料',linkJson:'[]'});
   jobs.enqueue({type:'classify_message',payload:{messageId:msg.id,accountRef:'7007'},runAt:now,maxAttempts:1});
-  const negative=await processNextClassifyJob({messages,suggestions,jobs,classifications,tasks,config:{},workerId:'w1',now,
-    suggest:async()=>({actionable:false})});
-  assert.equal(negative.processed,true);
+  const first=await processNextClassifyJob({messages,suggestions,jobs,classifications,tasks,config:{},workerId:'w1',now});
+  assert.equal(first.processed,true);
   assert.equal(suggestions.list({accountRef:'7007',status:'pending'}).length,0);
+  assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE type='suggest_conversation'").get().n,1);
   jobs.enqueue({type:'classify_message',payload:{messageId:999,accountRef:'7007'},runAt:now,maxAttempts:1});
-  const missing=await processNextClassifyJob({messages,suggestions,jobs,classifications,tasks,config:{},workerId:'w1',now,
-    suggest:async()=>({actionable:false})});
+  const missing=await processNextClassifyJob({messages,suggestions,jobs,classifications,tasks,config:{},workerId:'w1',now});
   assert.equal(missing.processed,true);
   assert.equal(missing.error,'message_not_found');
   const failed=store.db.prepare("SELECT state,last_error FROM jobs WHERE id=?").get(missing.jobId);

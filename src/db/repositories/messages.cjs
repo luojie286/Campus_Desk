@@ -95,6 +95,29 @@ function createMessageRepository(db){
     markRead({id,accountRef,readAt=new Date().toISOString()}){
       return db.prepare('UPDATE messages SET read_at=?,updated_at=? WHERE id=? AND account_ref=?')
         .run(readAt,readAt,Number(id),String(accountRef)).changes===1;
+    },
+    conversationCursor({accountRef,conversationType,conversationId}){
+      return db.prepare(`SELECT * FROM conversation_cursors
+        WHERE account_ref=? AND conversation_type=? AND conversation_id=?`)
+        .get(String(accountRef),String(conversationType),String(conversationId))||null;
+    },
+    setConversationCursor({accountRef,conversationType,conversationId,lastMessageId,now=new Date().toISOString()}){
+      db.prepare(`INSERT INTO conversation_cursors
+        (account_ref,conversation_type,conversation_id,last_message_id,updated_at)
+        VALUES(?,?,?,?,?)
+        ON CONFLICT(account_ref,conversation_type,conversation_id)
+        DO UPDATE SET last_message_id=excluded.last_message_id,updated_at=excluded.updated_at`)
+        .run(String(accountRef),String(conversationType),String(conversationId),Number(lastMessageId),now);
+      return db.prepare(`SELECT * FROM conversation_cursors
+        WHERE account_ref=? AND conversation_type=? AND conversation_id=?`)
+        .get(String(accountRef),String(conversationType),String(conversationId));
+    },
+    messagesAfter({accountRef,conversationType,conversationId,afterId=0,limit=20}){
+      const safeLimit=Math.min(Math.max(Number(limit)||20,1),50);
+      return db.prepare(`SELECT * FROM messages
+        WHERE account_ref=? AND conversation_type=? AND conversation_id=? AND id>?
+        ORDER BY id ASC LIMIT ?`)
+        .all(String(accountRef),String(conversationType),String(conversationId),Number(afterId),safeLimit);
     }
   };
 }

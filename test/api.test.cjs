@@ -57,6 +57,8 @@ test('api: auth, message center, suggestions and todos',async()=>{
     const detail=await call('/v1/messages/'+message.id,{headers:auth});
     assert.equal(detail.status,200);
     assert.equal(detail.body.suggestions.length,1);
+    assert.equal(detail.body.suggestions[0].source_count,1);
+    assert.equal(detail.body.suggestions[0].sources.length,1);
     assert.equal(detail.body.files[0].text_state,'pending');
     const sources=await call('/v1/sources',{headers:auth});
     assert.equal(sources.status,200);

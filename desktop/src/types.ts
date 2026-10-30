@@ -39,6 +39,9 @@ export interface Suggestion {
   sender_id?: string;
   conversation_id?: string;
   received_at?: string;
+  thread_key?: string | null;
+  source_count?: number;
+  sources?: Array<{id: number; sender_id: string; received_at: string; text: string | null}>;
 }
 
 export interface SourceRow {

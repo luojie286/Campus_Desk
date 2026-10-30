@@ -1,10 +1,13 @@
 // 分类 worker：规则分类 -> 需要时调用候选模型 -> 保存 pending 候选。
 // 只读消息和个人资料，不打开文档、不执行写入。
-const {classifyMessage,shouldSuggest}=require('../classify/rules.cjs');
-const {buildSuggestionPayload}=require('../suggest/llm.cjs');
+const {classifyMessage}=require('../classify/rules.cjs');
 const {canonicalUrl}=require('../core.cjs');
 
-async function processNextClassifyJob({messages,suggestions,jobs,classifications,tasks,config,workerId,now=new Date().toISOString(),suggest}){
+function conversationDedupeKey({accountRef,conversationType,conversationId}){
+  return `suggest:${accountRef}:${conversationType}:${conversationId}`;
+}
+
+async function processNextClassifyJob({messages,suggestions,jobs,classifications,tasks,config,workerId,now=new Date().toISOString()}){
   const job=jobs.claim({workerId,leaseSeconds:60,now,type:'classify_message'});
   if(!job)return {processed:false};
   try{
@@ -48,30 +51,24 @@ async function processNextClassifyJob({messages,suggestions,jobs,classifications
         createdTasks.push(task);
         if(task.created)jobs.enqueue({type:'prepare_task',payload:{taskId:task.id,accountRef:task.account_ref},runAt:now});
       }
-    }else if(message.kind!=='file'&&shouldSuggest(classification.category)){
-      // 聊天/文件总结才进入待办候选，由用户保留或忽略。
-      if(typeof suggest!=='function')throw Error('suggest_function_required');
-      const llmPayload=buildSuggestionPayload({
-        message:{contentText:message.content_text,links},
-        classification
+    }else if(message.kind!=='file'){
+      // 同一会话的消息先防抖合并，再由会话 worker 过滤闲聊并生成/更新候选。
+      const runAt=new Date(new Date(now).getTime()+30000).toISOString();
+      jobs.enqueueUnique({
+        type:'suggest_conversation',
+        payload:{
+          accountRef:message.account_ref,
+          conversationType:message.conversation_type,
+          conversationId:message.conversation_id
+        },
+        runAt,
+        maxAttempts:3,
+        dedupeKey:conversationDedupeKey({
+          accountRef:message.account_ref,
+          conversationType:message.conversation_type,
+          conversationId:message.conversation_id
+        })
       });
-      const decision=await suggest({payload:llmPayload,config});
-      if(decision&&decision.actionable){
-        suggestionId=suggestions.insert({
-          messageId:message.id,
-          messageVersion:1,
-          kind:'todo',
-          title:decision.title,
-          summary:decision.summary,
-          category:decision.category||classification.category,
-          confidence:decision.confidence,
-          actionJson:{links},
-          status:'pending',
-          rationale:decision.rationale,
-          model:config.llm?.model||'deepseek-chat',
-          createdAt:now
-        });
-      }
     }
     jobs.complete(job.id,now);
     return {processed:true,jobId:job.id,messageId:message.id,classification,suggestionId,tasks:createdTasks};

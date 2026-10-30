@@ -57,7 +57,7 @@ function mapSource(row){
     last_text:row.last_text
   };
 }
-function mapSuggestion(row){
+function mapSuggestion(row,sourceRows=[]){
   return {
     id:row.id,
     message_id:row.message_id,
@@ -74,7 +74,15 @@ function mapSuggestion(row){
     message_text:row.content_text,
     sender_id:row.sender_id,
     conversation_id:row.conversation_id,
-    received_at:row.received_at
+    received_at:row.received_at,
+    thread_key:row.thread_key||null,
+    source_count:row.source_count??Math.max(1,sourceRows.length),
+    sources:sourceRows.map(source=>({
+      id:source.id,
+      sender_id:source.sender_id,
+      received_at:source.received_at,
+      text:source.content_text
+    }))
   };
 }
 function parseJson(value,fallback=null){
@@ -147,7 +155,7 @@ function createV2Handler({messages,suggestions,tasks,jobs,files,config}){
           if(!row){send(res,404,{error:'message_not_found'});return true;}
           const related=suggestions.listForMessage({messageId:id,accountRef});
           const fileRows=files?files.listForMessage({messageId:id,accountRef}):[];
-          send(res,200,{...mapMessage(row,fileRows),suggestions:related.map(mapSuggestion)});
+          send(res,200,{...mapMessage(row,fileRows),suggestions:related.map(item=>mapSuggestion(item,suggestions.sources({suggestionId:item.id,accountRef})))});
           return true;
         }
         if(req.method==='PATCH'){
@@ -162,7 +170,7 @@ function createV2Handler({messages,suggestions,tasks,jobs,files,config}){
       if(req.method==='GET'&&pathname==='/v1/suggestions'){
         const status=searchParams.get('status')||'pending';
         const items=suggestions.list({accountRef,status,limit:searchParams.get('limit')||50});
-        send(res,200,{items:items.map(mapSuggestion)});
+        send(res,200,{items:items.map(item=>mapSuggestion(item,suggestions.sources({suggestionId:item.id,accountRef})))});
         return true;
       }
       const suggestionMatch=pathname.match(/^\/v1\/suggestions\/(\d+)\/(accept|dismiss)$/);
@@ -172,11 +180,11 @@ function createV2Handler({messages,suggestions,tasks,jobs,files,config}){
         const deviceId=body.device_id?String(body.device_id):null;
         if(suggestionMatch[2]==='accept'){
           const result=suggestions.accept({id,accountRef,deviceId});
-          send(res,200,{suggestion:mapSuggestion(result.suggestion),todo:result.todo,tasks:result.tasks||[]});
+          send(res,200,{suggestion:mapSuggestion(result.suggestion,suggestions.sources({suggestionId:result.suggestion.id,accountRef})),todo:result.todo,tasks:result.tasks||[]});
           return true;
         }
         const dismissed=suggestions.dismiss({id,accountRef,deviceId});
-        send(res,200,{suggestion:mapSuggestion(dismissed)});
+        send(res,200,{suggestion:mapSuggestion(dismissed,suggestions.sources({suggestionId:dismissed.id,accountRef}))});
         return true;
       }
       if(req.method==='GET'&&pathname==='/v1/todos'){

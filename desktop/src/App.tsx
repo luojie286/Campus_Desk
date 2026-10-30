@@ -663,6 +663,7 @@ function MessageCard({
             </div>
             <h3>{suggestion.title}</h3>
             <p>{suggestion.summary || suggestion.rationale || '模型认为这条消息可能需要行动。'}</p>
+            {(suggestion.source_count || 1) > 1 && <div className="ai-sources-summary">已合并 {suggestion.source_count} 条来源消息</div>}
             <div className="ai-actions">
               <button className="button primary small" disabled={busy} onClick={() => onAccept(suggestion.id)}>保留为待办</button>
               <button className="button ghost small" disabled={busy} onClick={() => onDismiss(suggestion.id)}>忽略</button>
@@ -750,6 +751,17 @@ function MessageDetail({
             </div>
             <h3>{suggestion.title}</h3>
             <p>{suggestion.summary || suggestion.rationale || '无摘要'}</p>
+            {(suggestion.sources?.length || 0) > 1 && (
+              <div className="source-list">
+                <div className="source-list-title">合并的来源消息</div>
+                {suggestion.sources?.map(source => (
+                  <div className="source-quote" key={source.id}>
+                    <strong>成员 {source.sender_id}</strong>
+                    <span>{source.text || '（无正文）'}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             {suggestion.status === 'pending' ? (
               <div className="ai-actions">
                 <button className="button primary small" disabled={busy} onClick={() => onAccept(suggestion.id)}>保留为待办</button>

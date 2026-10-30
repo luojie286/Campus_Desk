@@ -20,9 +20,11 @@ const {processNextClassifyJob}=require('./worker/classify.cjs');
 const {processNextPrepareJob}=require('./worker/prepare.cjs');
 const {processNextExecuteJob}=require('./worker/execute.cjs');
 const {processNextFileJob}=require('./worker/file.cjs');
+const {processNextConversationJob}=require('./worker/conversation.cjs');
 const {downloadOneBotFile}=require('./files/onebot.cjs');
 const {extractPdfText}=require('./files/pdf.cjs');
 const {suggestFromMessage}=require('./suggest/llm.cjs');
+const {suggestFromConversation}=require('./suggest/conversation.cjs');
 const {createV2Handler}=require('./api/v2.cjs');
 fs.mkdirSync('.private',{recursive:true});
 const configPath='.private/config.json';
@@ -140,8 +142,23 @@ async function drainClassifyJobs(){
       tasks:tasksRepo,
       config,
       workerId,
+      now:new Date().toISOString()
+    });
+    if(!result.processed)break;
+  }
+}
+// 会话 worker：过滤闲聊，并把同一事务的多条消息合并成一个候选。
+async function drainConversationJobs(){
+  if(!config.messageCenter)return;
+  for(let i=0;i<2;i++){
+    const result=await processNextConversationJob({
+      messages:messagesRepo,
+      suggestions:suggestionsRepo,
+      jobs:jobsRepo,
+      config,
+      workerId,
       now:new Date().toISOString(),
-      suggest:({payload})=>suggestFromMessage({payload,config})
+      suggest:({payload})=>suggestFromConversation({payload,config})
     });
     if(!result.processed)break;
   }
@@ -565,6 +582,7 @@ async function main(){
     setInterval(()=>drain().catch(()=>{}),2000).unref();
     if(config.messageCenter){
       setInterval(()=>drainClassifyJobs().catch(()=>{}),2000).unref();
+      setInterval(()=>drainConversationJobs().catch(()=>{}),2000).unref();
       setInterval(()=>drainFileJobs().catch(()=>{}),2000).unref();
       setInterval(()=>drainPrepareJobs().catch(()=>{}),2000).unref();
       setInterval(()=>drainExecuteJobs().catch(()=>{}),2000).unref();

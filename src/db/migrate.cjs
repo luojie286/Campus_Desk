@@ -343,6 +343,65 @@ const MIGRATIONS=[
           ON message_files(download_state,text_state);
       `);
     }
+  },
+  {
+    version:4,
+    name:'conversation_merge',
+    up(db){
+      // 候选从单消息升级为会话批次：保留来源消息、线程键和会话游标。
+      db.exec(`
+        ALTER TABLE suggestions ADD COLUMN account_ref TEXT;
+        ALTER TABLE suggestions ADD COLUMN conversation_type TEXT;
+        ALTER TABLE suggestions ADD COLUMN conversation_id TEXT;
+        ALTER TABLE suggestions ADD COLUMN thread_key TEXT;
+        ALTER TABLE suggestions ADD COLUMN source_count INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE suggestions ADD COLUMN updated_at TEXT;
+        CREATE TABLE IF NOT EXISTS suggestion_messages(
+          suggestion_id INTEGER NOT NULL,
+          message_id INTEGER NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY(suggestion_id,message_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_suggestion_messages_message
+          ON suggestion_messages(message_id,suggestion_id);
+        CREATE TABLE IF NOT EXISTS conversation_cursors(
+          account_ref TEXT NOT NULL,
+          conversation_type TEXT NOT NULL,
+          conversation_id TEXT NOT NULL,
+          last_message_id INTEGER NOT NULL DEFAULT 0,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(account_ref,conversation_type,conversation_id)
+        );
+        ALTER TABLE jobs ADD COLUMN dedupe_key TEXT;
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_dedupe_active
+          ON jobs(dedupe_key)
+          WHERE dedupe_key IS NOT NULL AND state IN ('queued','running');
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_suggestions_pending_thread
+          ON suggestions(account_ref,conversation_type,conversation_id,thread_key)
+          WHERE status='pending' AND thread_key IS NOT NULL;
+        UPDATE suggestions SET account_ref=(SELECT account_ref FROM messages WHERE messages.id=suggestions.message_id);
+        UPDATE suggestions SET conversation_type=(SELECT conversation_type FROM messages WHERE messages.id=suggestions.message_id);
+        UPDATE suggestions SET conversation_id=(SELECT conversation_id FROM messages WHERE messages.id=suggestions.message_id);
+        UPDATE suggestions SET updated_at=created_at WHERE updated_at IS NULL;
+        INSERT OR IGNORE INTO suggestion_messages(suggestion_id,message_id,created_at)
+          SELECT id,message_id,created_at FROM suggestions;
+      `);
+    }
+  },
+  {
+    version:5,
+    name:'conversation_cursor_bootstrap',
+    up(db){
+      // 已有会话从当前最后一条消息之后开始分析，避免部署后重扫历史聊天。
+      db.exec(`
+        INSERT OR IGNORE INTO conversation_cursors
+          (account_ref,conversation_type,conversation_id,last_message_id,updated_at)
+        SELECT account_ref,conversation_type,conversation_id,MAX(id),
+          strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        FROM messages
+        GROUP BY account_ref,conversation_type,conversation_id;
+      `);
+    }
   }
 ];
 

@@ -2,12 +2,40 @@
 function createJobRepository(db){
   const nowIso=()=>new Date().toISOString();
   return {
-    enqueue({type,payload={},runAt=nowIso(),maxAttempts=5}){
+    enqueue({type,payload={},runAt=nowIso(),maxAttempts=5,dedupeKey=null}){
       const info=db.prepare(`INSERT INTO jobs
-        (type,payload_json,run_at,attempts,max_attempts,state,created_at,updated_at)
-        VALUES(?,?,?,0,?,'queued',?,?)`)
-        .run(String(type),JSON.stringify(payload||{}),runAt,Number(maxAttempts),runAt,runAt);
+        (type,payload_json,run_at,attempts,max_attempts,state,dedupe_key,created_at,updated_at)
+        VALUES(?,?,?,0,?,'queued',?,?,?)`)
+        .run(String(type),JSON.stringify(payload||{}),runAt,Number(maxAttempts),
+          dedupeKey===null?null:String(dedupeKey),runAt,runAt);
       return Number(info.lastInsertRowid);
+    },
+    // 同一会话的短时间消息共用一个 queued job；后到的消息把执行时间往后推。
+    enqueueUnique({type,payload={},runAt=nowIso(),maxAttempts=5,dedupeKey}){
+      if(!dedupeKey)throw Error('dedupe_key_required');
+      db.exec('BEGIN IMMEDIATE');
+      try{
+        const existing=db.prepare(`SELECT * FROM jobs
+          WHERE dedupe_key=? AND state IN ('queued','running') ORDER BY id LIMIT 1`).get(String(dedupeKey));
+        if(existing){
+          if(existing.state==='queued'){
+            db.prepare('UPDATE jobs SET run_at=?,payload_json=?,updated_at=? WHERE id=?')
+              .run(runAt,JSON.stringify(payload||{}),nowIso(),existing.id);
+          }
+          db.exec('COMMIT');
+          return Number(existing.id);
+        }
+        const info=db.prepare(`INSERT INTO jobs
+          (type,payload_json,run_at,attempts,max_attempts,state,dedupe_key,created_at,updated_at)
+          VALUES(?,?,?,0,?,'queued',?,?,?)`)
+          .run(String(type),JSON.stringify(payload||{}),runAt,Number(maxAttempts),
+            String(dedupeKey),runAt,runAt);
+        db.exec('COMMIT');
+        return Number(info.lastInsertRowid);
+      }catch(error){
+        db.exec('ROLLBACK');
+        throw error;
+      }
     },
     claim({workerId,leaseSeconds=60,now=nowIso(),type=null}){
       db.exec('BEGIN IMMEDIATE');
