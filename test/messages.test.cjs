@@ -107,3 +107,39 @@ test('jobs: claim with lease, complete, retry and recover expired leases',()=>{
   assert.equal(jobs.claim({workerId:'w2',leaseSeconds:60,now:'2026-10-30T00:00:11.000Z'}).id,leaseId);
   store.db.close();
 });
+test('jobs: enqueueUnique reuses queued jobs and only reclaims expired running leases',()=>{
+  const {jobs,store}=setup();
+  const dedupeKey='reconcile:1';
+  const first=jobs.enqueueUnique({
+    type:'reconcile_task',payload:{taskId:1},runAt:'2026-10-30T00:00:01.000Z',
+    dedupeKey,now:'2026-10-30T00:00:01.000Z'
+  });
+  const queuedAgain=jobs.enqueueUnique({
+    type:'reconcile_task',payload:{taskId:1,operationId:2},runAt:'2026-10-30T00:00:02.000Z',
+    dedupeKey,now:'2026-10-30T00:00:02.000Z'
+  });
+  assert.equal(queuedAgain,first);
+  let row=store.db.prepare('SELECT * FROM jobs WHERE id=?').get(first);
+  assert.equal(row.state,'queued');
+  assert.equal(JSON.parse(row.payload_json).operationId,2);
+
+  jobs.claim({workerId:'w1',type:'reconcile_task',leaseSeconds:60,now:'2026-10-30T00:00:03.000Z'});
+  const running=jobs.enqueueUnique({
+    type:'reconcile_task',payload:{taskId:1},runAt:'2026-10-30T00:00:04.000Z',
+    dedupeKey,stealExpired:true,now:'2026-10-30T00:00:04.000Z'
+  });
+  assert.equal(running,first);
+  row=store.db.prepare('SELECT * FROM jobs WHERE id=?').get(first);
+  assert.equal(row.state,'running');
+
+  const reclaimed=jobs.enqueueUnique({
+    type:'reconcile_task',payload:{taskId:1,operationId:3},runAt:'2026-10-30T00:02:00.000Z',
+    dedupeKey,stealExpired:true,now:'2026-10-30T00:02:00.000Z'
+  });
+  assert.equal(reclaimed,first);
+  row=store.db.prepare('SELECT * FROM jobs WHERE id=?').get(first);
+  assert.equal(row.state,'queued');
+  assert.equal(row.lease_owner,null);
+  assert.equal(JSON.parse(row.payload_json).operationId,3);
+  store.db.close();
+});

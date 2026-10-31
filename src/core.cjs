@@ -334,7 +334,7 @@ function changesMatch(plan,grid) {
   return plan.changes.every(change=>text(grid[change.row-1]?.[change.col-1])===text(change.value));
 }
 
-module.exports={canonicalUrl,extractLinks,sourceMatches,buildPlan,openStore,eventKey,digest,
+module.exports={canonicalUrl,extractLinks,sourceMatches,buildPlan,openStore,eventKey,digest,text,
   parseTsv,findIdentityRow,findHeaderRow,findHeaderRowByContent,findPartialIdentityRow,findReservedIdentity,
   buildGeneralPlan,assertWritePreconditions,changesMatch,approvalCheck,placeholderIsPresent,reservationCellEmpty,
   runBelongsToAccount};

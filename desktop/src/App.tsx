@@ -69,6 +69,15 @@ const ERROR_LABELS: Record<string, string> = {
   answers_required: '请先填写需要补充的信息。',
   invalid_answer: '提交的信息不完整或包含未知字段。',
   suggestion_already_decided: '这条候选已经处理过了，请刷新。',
+  manual_reconciliation_required: '核对发现文档内容与计划不一致，任务保持结果未知；请人工核对后再试。',
+  readback_mismatch: '上次回读与计划不一致。',
+  login_required: '腾讯文档需要重新登录，请先在专用浏览器登录。',
+  reconcile_not_available: '找不到可核对的执行记录或计划，请检查任务详情。',
+  reconcile_failed: '打开或读取文档失败；系统不会重写，请稍后重试。',
+  operation_not_found: '找不到这次写入的执行记录，任务无法自动核对。',
+  plan_not_found: '找不到这次写入对应的计划，任务无法自动核对。',
+  plan_invalid: '计划内容无效或为空，任务无法自动核对。',
+  document_login_window_open_close_it_first: '文档登录辅助器还开着，请先关闭它再继续。',
   token_missing: '还没有配置访问令牌。',
   onebot_unreachable: '连接不到 NapCat HTTP API（9088）。请确认 NapCat 已登录，且 OneBot HTTP 服务已启动。',
   onebot_action_failed: 'NapCat 没有返回联系人列表，请确认 QQ 已登录并稍后重试。'
@@ -132,7 +141,7 @@ function sourceLabel(source: SourceRow) {
 }
 
 function taskIsActive(task: Task) {
-  return ['awaiting_input', 'awaiting_approval', 'approved', 'executing', 'verifying', 'outcome_unknown'].includes(task.state);
+  return ['awaiting_input', 'awaiting_approval', 'approved', 'executing', 'verifying', 'outcome_unknown', 'paused_login_required', 'failed_retryable'].includes(task.state);
 }
 
 function toneFor(value: string) {
@@ -226,6 +235,11 @@ function App() {
       return;
     }
     api.loadTask(selectedTaskId).then(setDetailTask).catch(caught => setError(errorText(caught)));
+    // 核对是异步 worker：打开中的详情也要轮询，否则看不到核对后的状态和错误类别。
+    const timer = window.setInterval(() => {
+      api.loadTask(selectedTaskId).then(setDetailTask).catch(() => {});
+    }, REFRESH_MS);
+    return () => window.clearInterval(timer);
   }, [selectedTaskId]);
 
   useEffect(() => {
@@ -636,6 +650,8 @@ function App() {
                 onApprove={plan => run(() => api.approveTask(detailTask, plan), '审批已提交，正在写入并回读。')}
                 onCancel={() => run(() => api.cancelTask(detailTask.id), '任务已取消。')}
                 onAnswer={answers => run(() => api.answerTask(detailTask.id, answers), '补充信息已保存，正在重新生成计划。')}
+                onReconcile={() => run(() => api.reconcileTask(detailTask.id), '已提交核对，正在只读读取文档；结果会自动刷新。')}
+                onResume={() => run(() => api.resumeTask(detailTask.id), detailTask.state === 'failed_retryable' ? '已重新加入准备队列，仍需重新审批后才会写入。' : '已恢复准备任务。')}
               />
             ) : detailMessage ? (
               <MessageDetail
@@ -841,19 +857,31 @@ function TaskDetail({
   busy,
   onApprove,
   onCancel,
-  onAnswer
+  onAnswer,
+  onReconcile,
+  onResume
 }: {
   task: Task;
   busy: boolean;
   onApprove: (plan: Plan) => void;
   onCancel: () => void;
   onAnswer: (answers: Array<{key: string; value: string}>) => void;
+  onReconcile: () => void;
+  onResume: () => void;
 }) {
   const plan = task.plan || null;
   const changes = plan?.plan.changes || [];
   const questions = task.questions || [];
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [confirming, setConfirming] = useState(false);
+  const operation = task.latest_operation || null;
+  const reconcileEvidence = operation?.evidence && typeof operation.evidence === 'object'
+    ? operation.evidence as {matched?: number; total?: number; mismatches?: Array<{cell?: string; field?: string}>}
+    : null;
+  const mismatchCells = (reconcileEvidence?.mismatches || [])
+    .map(item => item.cell)
+    .filter((cell): cell is string => Boolean(cell))
+    .join('、');
 
   useEffect(() => {
     setAnswers({});
@@ -886,8 +914,30 @@ function TaskDetail({
         {plan?.plan.identityMode && <span>{plan.plan.identityMode === 'full' ? '姓名 + 学号' : plan.plan.identityMode === 'name_only' ? '仅姓名' : plan.plan.identityMode === 'student_id_only' ? '仅学号' : plan.plan.identityMode === 'new_row' ? '新增行' : '占位行'}</span>}
       </div>
 
-      {task.state === 'outcome_unknown' && <div className="callout callout-error"><CircleAlert size={17} /><span>上次写入结果未知。系统只允许核对，不会自动重写。</span></div>}
+      {task.state === 'outcome_unknown' && <div className="callout callout-error"><CircleAlert size={17} /><span>上次写入结果未知。核对只读读取文档，不会自动重写；如果腾讯文档需要登录，请先完成登录再核对。</span></div>}
+      {task.state === 'outcome_unknown' && operation?.error_class === 'manual_reconciliation_required' && (
+        <div className="callout callout-warm">
+          <CircleAlert size={17} />
+          <span>
+            核对未通过：{reconcileEvidence?.matched ?? 0}/{reconcileEvidence?.total ?? changes.length} 个单元格与计划一致
+            {mismatchCells ? `；不一致：${mismatchCells}` : ''}。请人工处理，系统不会重写。
+          </span>
+        </div>
+      )}
+      {task.state === 'outcome_unknown' && operation?.error_class && operation.error_class !== 'manual_reconciliation_required' && (
+        <div className="callout callout-warm">
+          <CircleAlert size={17} />
+          <span>{ERROR_LABELS[operation.error_class] || operation.error_class}</span>
+        </div>
+      )}
       {task.state === 'paused_login_required' && <div className="callout callout-warm"><CircleAlert size={17} /><span>腾讯文档需要重新登录，完成后再恢复任务。</span></div>}
+      {task.state === 'failed_retryable' && <div className="callout callout-warm"><CircleAlert size={17} /><span>上次准备或写入前步骤失败。可以重新准备；最终写入仍需重新审批。</span></div>}
+      {task.state === 'failed_terminal' && (
+        <div className="callout callout-error">
+          <CircleAlert size={17} />
+          <span>{operation?.error_class ? (ERROR_LABELS[operation.error_class] || operation.error_class) : '任务已进入终止状态，需要人工处理。'}</span>
+        </div>
+      )}
 
       {task.state === 'awaiting_input' && questions.length > 0 && (
         <form className="question-form" onSubmit={submitAnswers}>
@@ -942,6 +992,15 @@ function TaskDetail({
           >
             {confirming ? '确认写入' : '批准并写入'}
           </button>
+        )}
+        {task.state === 'outcome_unknown' && (
+          <button className="button primary" disabled={busy} onClick={onReconcile}>核对写入结果</button>
+        )}
+        {task.state === 'paused_login_required' && (
+          <button className="button primary" disabled={busy} onClick={onResume}>已完成登录，继续准备</button>
+        )}
+        {task.state === 'failed_retryable' && (
+          <button className="button primary" disabled={busy} onClick={onResume}>重试准备</button>
         )}
         {['awaiting_input', 'awaiting_approval', 'approved'].includes(task.state) && (
           <button className="button ghost" disabled={busy} onClick={onCancel}>取消任务</button>

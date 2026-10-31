@@ -158,6 +158,12 @@ function createTaskRepository(db){
       return db.prepare('SELECT * FROM operations WHERE id=? AND task_id=?')
         .get(Number(id),Number(taskId))||null;
     },
+    // 任务最近一次操作；必须带 accountRef，避免 API 或 worker 跨账号读取。
+    latestOperation({taskId,accountRef}){
+      return db.prepare(`SELECT o.* FROM operations o JOIN tasks t ON t.id=o.task_id
+        WHERE o.task_id=? AND t.account_ref=? ORDER BY o.id DESC LIMIT 1`)
+        .get(Number(taskId),String(accountRef))||null;
+    },
     beginOperation({operationId,now=nowIso()}){
       const operation=db.prepare('SELECT * FROM operations WHERE id=?').get(Number(operationId));
       if(!operation)throw Error('operation_not_found');
@@ -167,15 +173,30 @@ function createTaskRepository(db){
         .run(now,Number(operationId));
       return db.prepare('SELECT * FROM operations WHERE id=?').get(Number(operationId));
     },
-    completeOperation({operationId,evidence=null,now=nowIso()}){
-      db.prepare(`UPDATE operations SET state='completed',evidence_json=?,finished_at=? WHERE id=?`)
-        .run(evidence===null?null:JSON.stringify(evidence),now,Number(operationId));
+    // expectedState 用于核对等并发场景：只有 operation 仍处于预期状态时才允许更新。
+    // 完成时清空 error_class，避免上一次核对/登录失败的错误类别残留到 completed。
+    completeOperation({operationId,evidence=null,now=nowIso(),expectedState=null}){
+      const sql=expectedState
+        ? `UPDATE operations SET state='completed',evidence_json=?,error_class=NULL,finished_at=?
+           WHERE id=? AND state=?`
+        : `UPDATE operations SET state='completed',evidence_json=?,error_class=NULL,finished_at=?
+           WHERE id=?`;
+      const params=[evidence===null?null:JSON.stringify(evidence),now,Number(operationId)];
+      if(expectedState)params.push(String(expectedState));
+      const changed=db.prepare(sql).run(...params).changes;
+      if(changed!==1)return null;
       return db.prepare('SELECT * FROM operations WHERE id=?').get(Number(operationId));
     },
-    failOperation({operationId,state='failed_retryable',errorClass=null,evidence=null,now=nowIso()}){
+    failOperation({operationId,state='failed_retryable',errorClass=null,evidence=null,now=nowIso(),expectedState=null}){
       if(!['failed_retryable','unknown','failed_terminal'].includes(state))throw Error('invalid_operation_state');
-      db.prepare(`UPDATE operations SET state=?,error_class=?,evidence_json=?,finished_at=? WHERE id=?`)
-        .run(state,errorClass,evidence===null?null:JSON.stringify(evidence),now,Number(operationId));
+      const sql=expectedState
+        ? `UPDATE operations SET state=?,error_class=?,evidence_json=?,finished_at=?
+           WHERE id=? AND state=?`
+        : `UPDATE operations SET state=?,error_class=?,evidence_json=?,finished_at=? WHERE id=?`;
+      const params=[state,errorClass,evidence===null?null:JSON.stringify(evidence),now,Number(operationId)];
+      if(expectedState)params.push(String(expectedState));
+      const changed=db.prepare(sql).run(...params).changes;
+      if(changed!==1)return null;
       return db.prepare('SELECT * FROM operations WHERE id=?').get(Number(operationId));
     },
     // 审批、操作入队和任务状态在同一个事务中完成；重复请求返回同一个操作。

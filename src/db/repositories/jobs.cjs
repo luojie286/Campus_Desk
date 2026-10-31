@@ -11,7 +11,8 @@ function createJobRepository(db){
       return Number(info.lastInsertRowid);
     },
     // 同一会话的短时间消息共用一个 queued job；后到的消息把执行时间往后推。
-    enqueueUnique({type,payload={},runAt=nowIso(),maxAttempts=5,dedupeKey}){
+    // stealExpired：租约已过期的 running job 可被重新排队，避免服务长期运行时旧 job 永久占住 dedupeKey。
+    enqueueUnique({type,payload={},runAt=nowIso(),maxAttempts=5,dedupeKey,stealExpired=false,now=nowIso()}){
       if(!dedupeKey)throw Error('dedupe_key_required');
       db.exec('BEGIN IMMEDIATE');
       try{
@@ -20,7 +21,12 @@ function createJobRepository(db){
         if(existing){
           if(existing.state==='queued'){
             db.prepare('UPDATE jobs SET run_at=?,payload_json=?,updated_at=? WHERE id=?')
-              .run(runAt,JSON.stringify(payload||{}),nowIso(),existing.id);
+              .run(runAt,JSON.stringify(payload||{}),now,existing.id);
+          }else if(stealExpired&&existing.lease_expires_at&&existing.lease_expires_at<=now){
+            // 只回收确认过期的租约；不要抢占仍在执行中的 job。
+            db.prepare(`UPDATE jobs SET state='queued',run_at=?,payload_json=?,lease_owner=NULL,
+              lease_expires_at=NULL,updated_at=? WHERE id=?`)
+              .run(runAt,JSON.stringify(payload||{}),now,existing.id);
           }
           db.exec('COMMIT');
           return Number(existing.id);

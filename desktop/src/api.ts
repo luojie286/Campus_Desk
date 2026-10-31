@@ -191,3 +191,17 @@ export async function approveTask(task: Task, plan: Plan) {
 export async function cancelTask(id: number) {
   return request<{task: Task}>(`/v1/tasks/${id}/cancel`, {method: 'POST', body: '{}'});
 }
+
+export async function reconcileTask(id: number) {
+  return request<{ok: boolean; queued: boolean; state: string; operation_id: number; job_id: number}>(
+    `/v1/tasks/${id}/reconcile`,
+    {method: 'POST', body: '{}'}
+  );
+}
+
+export async function resumeTask(id: number) {
+  return request<{ok: boolean; state: string; task_version: number; job_id: number}>(
+    `/v1/tasks/${id}/resume`,
+    {method: 'POST', body: '{}'}
+  );
+}

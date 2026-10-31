@@ -147,6 +147,19 @@ export interface Plan {
   created_at: string;
 }
 
+export interface TaskOperation {
+  id: number;
+  task_id: number;
+  plan_id: number;
+  kind: string;
+  state: string;
+  attempt: number;
+  error_class: string | null;
+  evidence: Record<string, unknown> | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
 export interface Task {
   id: number;
   todo_id: number | null;
@@ -165,6 +178,7 @@ export interface Task {
   plan?: Plan | null;
   questions?: TaskQuestion[];
   answers?: Array<{key: string; value: string}>;
+  latest_operation?: TaskOperation | null;
 }
 
 export interface Operation {

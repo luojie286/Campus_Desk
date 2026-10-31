@@ -146,6 +146,22 @@ function mapPlan(row){
     created_at:row.created_at
   };
 }
+// 只返回桌面需要的操作字段；不暴露 idempotency_key，证据已解析为对象。
+function mapOperation(row){
+  if(!row)return null;
+  return {
+    id:row.id,
+    task_id:row.task_id,
+    plan_id:row.plan_id,
+    kind:row.kind,
+    state:row.state,
+    attempt:row.attempt,
+    error_class:row.error_class,
+    evidence:parseJson(row.evidence_json,null),
+    started_at:row.started_at,
+    finished_at:row.finished_at
+  };
+}
 const knownErrors=new Set(['invalid_cursor','message_not_found','suggestion_not_found','suggestion_already_decided','invalid_body','body_too_large','invalid_json']);
 
 function createV2Handler({messages,suggestions,tasks,jobs,files,sources,notifications,contacts,config}){
@@ -318,7 +334,7 @@ function createV2Handler({messages,suggestions,tasks,jobs,files,sources,notifica
           send(res,200,{items:items.map(mapTask)});
           return true;
         }
-        const taskMatch=pathname.match(/^\/v1\/tasks\/(\d+)(?:\/(plan|answers|approvals|cancel|operations\/(\d+)))?$/);
+        const taskMatch=pathname.match(/^\/v1\/tasks\/(\d+)(?:\/(plan|answers|approvals|cancel|reconcile|resume|operations\/(\d+)))?$/);
         if(!taskMatch)return false;
         const taskId=Number(taskMatch[1]);
         let task=tasks.get({id:taskId,accountRef});
@@ -334,7 +350,9 @@ function createV2Handler({messages,suggestions,tasks,jobs,files,sources,notifica
             ...mapTask(task),
             plan:mapPlan(plan),
             questions:tasks.questions({taskId,taskVersion:task.state_version}),
-            answers:tasks.latestAnswers({taskId})
+            answers:tasks.latestAnswers({taskId}),
+            // 核对是异步的：桌面需要从详情读取最后一次操作的结果和错误类别。
+            latest_operation:mapOperation(tasks.latestOperation({taskId,accountRef}))
           });
           return true;
         }
@@ -391,6 +409,53 @@ function createV2Handler({messages,suggestions,tasks,jobs,files,sources,notifica
           send(res,200,{task:mapTask(next)});
           return true;
         }
+        if(action==='reconcile'&&req.method==='POST'){
+          // 只核对 outcome_unknown；写入已发生与否由 worker 只读回读判断，API 不做任何写入。
+          if(task.state!=='outcome_unknown')throw Error('invalid_transition_'+task.state+'_reconcile');
+          const operation=tasks.latestOperation({taskId,accountRef});
+          if(!operation||operation.state!=='unknown')throw Error('reconcile_not_available');
+          const plan=tasks.getPlan({id:operation.plan_id,accountRef});
+          if(!plan||Number(plan.task_id)!==Number(task.id))throw Error('reconcile_not_available');
+          const jobId=jobs.enqueueUnique({
+            type:'reconcile_task',
+            payload:{taskId,accountRef,operationId:operation.id},
+            runAt:new Date().toISOString(),
+            maxAttempts:3,
+            dedupeKey:'reconcile:'+taskId,
+            stealExpired:true
+          });
+          send(res,202,{
+            ok:true,
+            queued:true,
+            state:task.state,
+            operation_id:operation.id,
+            job_id:jobId,
+            task:mapTask(task)
+          });
+          return true;
+        }
+        if(action==='resume'&&req.method==='POST'){
+          // 登录暂停和写前失败都只需要重新准备；最终写入仍要重新审批。
+          const event=task.state==='paused_login_required'?'resume_login'
+            :task.state==='failed_retryable'?'retry':null;
+          if(!event)throw Error('invalid_transition_'+task.state+'_resume');
+          const next=tasks.transition({id:taskId,accountRef,event});
+          const jobId=jobs.enqueueUnique({
+            type:'prepare_task',
+            payload:{taskId,accountRef},
+            runAt:new Date().toISOString(),
+            dedupeKey:'prepare:'+taskId,
+            stealExpired:true
+          });
+          send(res,200,{
+            ok:true,
+            state:next.state,
+            task_version:next.state_version,
+            job_id:jobId,
+            task:mapTask(next)
+          });
+          return true;
+        }
         const operationMatch=action.match(/^operations\/(\d+)$/);
         if(operationMatch&&req.method==='GET'){
           const operation=tasks.getOperation({id:Number(operationMatch[1]),taskId});
@@ -407,7 +472,7 @@ function createV2Handler({messages,suggestions,tasks,jobs,files,sources,notifica
         send(res,404,{error:message});
       }else if(message==='task_account_mismatch'){
         send(res,403,{error:message});
-      }else if(message==='suggestion_already_decided'||message.startsWith('invalid_transition_')||message==='plan_not_current'||message==='task_state_conflict'||message==='execute_disabled'){
+      }else if(message==='suggestion_already_decided'||message.startsWith('invalid_transition_')||message==='plan_not_current'||message==='task_state_conflict'||message==='execute_disabled'||message==='reconcile_not_available'){
         send(res,409,{error:message});
       }else if(message==='task_repository_unavailable'||message==='job_repository_unavailable'||message==='source_repository_unavailable'||message==='contact_service_unavailable'||message==='notification_repository_unavailable'){
         send(res,503,{error:message});

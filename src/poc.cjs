@@ -22,6 +22,7 @@ const {ingestEvent}=require('./intake/onebot.cjs');
 const {processNextClassifyJob}=require('./worker/classify.cjs');
 const {processNextPrepareJob}=require('./worker/prepare.cjs');
 const {processNextExecuteJob}=require('./worker/execute.cjs');
+const {processNextReconcileJob}=require('./worker/reconcile.cjs');
 const {processNextFileJob}=require('./worker/file.cjs');
 const {processNextConversationJob}=require('./worker/conversation.cjs');
 const {downloadOneBotFile}=require('./files/onebot.cjs');
@@ -216,6 +217,21 @@ async function drainExecuteJobs(){
       workerId,
       now:new Date().toISOString(),
       fields:()=>store.fields(),
+      createSheet:options=>new TencentSheet(options)
+    });
+    if(!result.processed)break;
+  }
+}
+// v2 结果未知任务的只读核对；与 legacy 的 `poc.cjs reconcile` 命令互不影响。
+async function drainReconcileJobs(){
+  if(!config.messageCenter)return;
+  for(let i=0;i<1;i++){
+    const result=await processNextReconcileJob({
+      tasks:tasksRepo,
+      jobs:jobsRepo,
+      config,
+      workerId,
+      now:new Date().toISOString(),
       createSheet:options=>new TencentSheet(options)
     });
     if(!result.processed)break;
@@ -601,6 +617,7 @@ async function main(){
       setInterval(()=>drainFileJobs().catch(()=>{}),2000).unref();
       setInterval(()=>drainPrepareJobs().catch(()=>{}),2000).unref();
       setInterval(()=>drainExecuteJobs().catch(()=>{}),2000).unref();
+      setInterval(()=>drainReconcileJobs().catch(()=>{}),2000).unref();
     }
   } else throw Error('unknown_command');
 }

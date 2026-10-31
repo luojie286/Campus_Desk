@@ -1096,6 +1096,7 @@ input:focus-visible {
 
 .status-pill.state-awaiting_approval,
 .status-pill.state-outcome_unknown,
+.status-pill.state-paused_login_required,
 .status-pill.state-failed_retryable,
 .status-pill.state-failed_terminal {
   color: var(--orange);

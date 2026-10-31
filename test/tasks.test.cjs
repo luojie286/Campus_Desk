@@ -50,6 +50,31 @@ test('tasks: direct doc task creation dedupes by request key and transitions exp
   assert.throws(()=>tasks.transition({id:task.id,accountRef:'7007',event:'verified',now}),/invalid_transition/);
   store.db.close();
 });
+test('tasks: latest operation is account-scoped and conditional updates preserve a final result',()=>{
+  const {store,tasks}=setup();
+  const task=createDocTask(tasks);
+  tasks.transition({id:task.id,accountRef:'7007',event:'start',now});
+  tasks.transition({id:task.id,accountRef:'7007',event:'ready_for_approval',now});
+  const saved=tasks.savePlan({taskId:task.id,plan:{changes:[{row:2,col:2,field:'major',value:'x'}]},digest:'d1',createdAt:now});
+  const approved=tasks.createApproval({
+    taskId:task.id,planId:saved.id,planVersion:saved.version,planDigest:saved.digest,
+    clientRequestId:'req-1',createdAt:now
+  });
+  const operationId=approved.operation.id;
+  assert.equal(tasks.latestOperation({taskId:task.id,accountRef:'7007'}).id,operationId);
+  assert.equal(tasks.latestOperation({taskId:task.id,accountRef:'9999'}),null);
+
+  // 条件不满足时不更新，避免并发核对覆盖最终结果。
+  assert.equal(tasks.completeOperation({operationId,evidence:{x:1},expectedState:'unknown',now}),null);
+  tasks.failOperation({operationId,state:'unknown',errorClass:'readback_mismatch',now});
+  const done=tasks.completeOperation({operationId,evidence:{reconciled:true},expectedState:'unknown',now});
+  assert.equal(done.state,'completed');
+  assert.equal(done.error_class,null);
+  assert.equal(tasks.completeOperation({operationId,evidence:{reconciled:false},expectedState:'unknown',now}),null);
+  assert.equal(JSON.parse(tasks.getOperation({id:operationId,taskId:task.id}).evidence_json).reconciled,true);
+  store.db.close();
+});
+
 test('tasks: plan versions, approval operations and document locks are serialized',()=>{
   const {store,tasks}=setup();
   const task=createDocTask(tasks);
