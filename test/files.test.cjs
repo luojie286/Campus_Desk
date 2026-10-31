@@ -59,7 +59,7 @@ test('files: a OneBot file segment is stored and queued without downloading in i
   assert.equal(JSON.parse(queued[0].payload_json).fileId,rows[0].id);
   store.db.close();
 });
-test('files: PDF text is extracted and summarized into one candidate, with long numbers redacted',async()=>{
+test('files: PDF text is extracted and queued back into conversation aggregation',async()=>{
   const {store,messages,suggestions,jobs,files}=setup();
   const message=messages.insert({...baseMessage,sourceMessageId:'m-file'});
   const file=files.insert({
@@ -67,32 +67,44 @@ test('files: PDF text is extracted and summarized into one candidate, with long 
     mimeType:'application/pdf',sizeBytes:1234,createdAt:now
   });
   jobs.enqueue({type:'process_file',payload:{fileId:file.id,messageId:message.id,accountRef:'7007'},runAt:now,maxAttempts:1});
-  let payloadSeen=null;
   const result=await processNextFileJob({
-    files,messages,suggestions,jobs,config,workerId:'w1',now,
+    files,messages,jobs,config,workerId:'w1',now,
     downloadFile:async()=>Buffer.from('%PDF-1.4 fake'),
     extractText:async()=>'报名通知：学号 202500000000 的同学请于周五前提交材料。',
-    suggest:async({payload})=>{
-      payloadSeen=payload;
-      return {actionable:true,title:'提交报名材料',summary:'周五前提交材料',category:'action',confidence:0.9,rationale:'PDF 通知'};
-    },
     dir:testDir
   });
   assert.equal(result.processed,true);
-  assert.equal(result.state,'suggested');
+  assert.equal(result.state,'queued_for_conversation');
   const current=files.get({id:file.id,accountRef:'7007'});
   assert.equal(current.download_state,'downloaded');
   assert.equal(current.text_state,'extracted');
   assert.equal(current.sha256.length,64);
-  const items=suggestions.listForMessage({messageId:message.id,accountRef:'7007'});
-  assert.equal(items.length,1);
-  assert.equal(items[0].title,'提交报名材料');
-  assert.equal(payloadSeen.text.includes('202500000000'),false);
-  assert.equal(payloadSeen.text.includes('报名通知'),true);
+  assert.equal(suggestions.listForMessage({messageId:message.id,accountRef:'7007'}).length,0);
+  assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE type='suggest_conversation'").get().n,1);
+  store.db.close();
+});
+test('files: DOCX files use the same download, extraction and conversation handoff',async()=>{
+  const {store,messages,jobs,files}=setup();
+  const message=messages.insert({...baseMessage,sourceMessageId:'m-docx'});
+  const file=files.insert({
+    messageId:message.id,accountRef:'7007',platformFileId:'file-docx',fileName:'通知.docx',
+    mimeType:null,sizeBytes:2048,createdAt:now
+  });
+  jobs.enqueue({type:'process_file',payload:{fileId:file.id,messageId:message.id,accountRef:'7007'},runAt:now,maxAttempts:1});
+  const result=await processNextFileJob({
+    files,messages,jobs,config,workerId:'w1',now,
+    downloadFile:async()=>Buffer.from('fake-docx'),
+    extractText:async()=>'Word 通知正文：请提交推荐表。',
+    dir:testDir
+  });
+  assert.equal(result.processed,true);
+  assert.equal(result.state,'queued_for_conversation');
+  assert.equal(files.get({id:file.id,accountRef:'7007'}).text_state,'extracted');
+  assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE type='suggest_conversation'").get().n,1);
   store.db.close();
 });
 test('files: an already extracted file recovers from a stale failure state',async()=>{
-  const {store,messages,suggestions,jobs,files}=setup();
+  const {store,messages,jobs,files}=setup();
   const message=messages.insert({...baseMessage,sourceMessageId:'m-recover'});
   const file=files.insert({
     messageId:message.id,accountRef:'7007',platformFileId:'file-3',fileName:'通知.pdf',
@@ -104,17 +116,18 @@ test('files: an already extracted file recovers from a stale failure state',asyn
     .run(textPath,file.id);
   jobs.enqueue({type:'process_file',payload:{fileId:file.id,messageId:message.id,accountRef:'7007'},runAt:now,maxAttempts:1});
   const result=await processNextFileJob({
-    files,messages,suggestions,jobs,config,workerId:'w1',now,
+    files,messages,jobs,config,workerId:'w1',now,
     downloadFile:async()=>{throw Error('should_not_download');},
     extractText:async()=>{throw Error('should_not_extract');},
-    suggest:async()=>({actionable:false}),
     dir:testDir
   });
   assert.equal(result.processed,true);
+  assert.equal(result.state,'queued_for_conversation');
   const current=files.get({id:file.id,accountRef:'7007'});
   assert.equal(current.text_state,'extracted');
   assert.equal(current.download_state,'downloaded');
   assert.equal(current.error,null);
+  assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE type='suggest_conversation'").get().n,1);
   store.db.close();
 });
 test('files: a PDF with no extractable text is marked empty and creates no candidate',async()=>{
@@ -126,10 +139,9 @@ test('files: a PDF with no extractable text is marked empty and creates no candi
   });
   jobs.enqueue({type:'process_file',payload:{fileId:file.id,messageId:message.id,accountRef:'7007'},runAt:now,maxAttempts:1});
   const result=await processNextFileJob({
-    files,messages,suggestions,jobs,config,workerId:'w1',now,
+    files,messages,jobs,config,workerId:'w1',now,
     downloadFile:async()=>Buffer.from('%PDF-1.4 fake'),
     extractText:async()=>'   ',
-    suggest:async()=>{throw Error('should_not_call_model');},
     dir:testDir
   });
   assert.equal(result.processed,true);

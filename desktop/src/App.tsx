@@ -112,6 +112,14 @@ function stateLabel(state: string) {
   return STATE_LABELS[state] || state;
 }
 
+function fileStateLabel(state: string) {
+  if (state === 'extracted') return '文字已提取';
+  if (state === 'empty') return '没有可提取文字';
+  if (state === 'unsupported') return '不支持的文件类型';
+  if (state === 'failed') return '处理失败';
+  return '处理中';
+}
+
 function sourceLabel(source: SourceRow) {
   return source.conversation_type === 'group' ? `群 ${source.conversation_id}` : `私聊 ${source.conversation_id}`;
 }
@@ -631,7 +639,7 @@ function MessageCard({
                 <span className="file-icon"><FileText size={16} /></span>
                 <div>
                   <strong>{file.file_name || '未命名附件'}</strong>
-                  <span>{file.size_bytes ? `${Math.round(file.size_bytes / 1024)} KB` : '大小未知'} · {file.text_state === 'extracted' ? '文字已提取' : file.text_state === 'empty' ? '没有可提取文字' : '处理中'}</span>
+                  <span>{file.size_bytes ? `${Math.round(file.size_bytes / 1024)} KB` : '大小未知'} · {fileStateLabel(file.text_state)}</span>
                 </div>
               </div>
             ))}
@@ -718,7 +726,7 @@ function MessageDetail({
           {message.files.map(file => (
             <div className="detail-file" key={file.id}>
               <span className="file-icon"><FileText size={17} /></span>
-              <div><strong>{file.file_name || '未命名附件'}</strong><span>{file.mime_type || '未知类型'} · {file.text_state}</span></div>
+              <div><strong>{file.file_name || '未命名附件'}</strong><span>{file.mime_type || '未知类型'} · {fileStateLabel(file.text_state)}</span></div>
             </div>
           ))}
         </section>

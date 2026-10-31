@@ -1,5 +1,6 @@
 // 会话级候选 worker：规则先丢弃寒暄，再让 LLM 过滤闲聊并把同事务消息合并。
 // 不处理文档链接（直接建任务）和文件附件（文件 worker 单独处理）。
+const fs=require('node:fs/promises');
 const {buildConversationPayload}=require('../suggest/conversation.cjs');
 
 const ACK_PATTERN=/^(收到|好的|好|嗯|哦|谢谢|感谢|OK|ok|👌|👍|哈+|在吗|辛苦了)[\s!！。.~～]*$/;
@@ -16,6 +17,27 @@ function eligible(message){
   return true;
 }
 
+async function candidateFor(message,files){
+  if(message.kind==='file'){
+    if(!files)return null;
+    const rows=files.listForMessage({messageId:message.id,accountRef:message.account_ref});
+    const parts=[];
+    for(const file of rows){
+      if(file.text_state!=='extracted'||!file.text_path)continue;
+      try{
+        const text=(await fs.readFile(file.text_path,'utf8')).trim();
+        if(text)parts.push(`[附件${file.file_name?'：'+file.file_name:''}]\n${text.slice(0,12000)}`);
+      }catch{}
+    }
+    if(!parts.length)return null;
+    return {
+      ...message,
+      content_text:[message.content_text,...parts].filter(Boolean).join('\n\n')
+    };
+  }
+  return eligible(message)?message:null;
+}
+
 function dedupeKey({accountRef,conversationType,conversationId}){
   return `suggest:${accountRef}:${conversationType}:${conversationId}`;
 }
@@ -24,6 +46,7 @@ async function processNextConversationJob({
   messages,
   suggestions,
   jobs,
+  files,
   config,
   workerId,
   now=new Date().toISOString(),
@@ -45,7 +68,11 @@ async function processNextConversationJob({
       return {processed:true,jobId:job.id,state:'empty'};
     }
     const maxId=rows[rows.length-1].id;
-    const candidates=rows.filter(eligible);
+    const candidates=[];
+    for(const row of rows){
+      const candidate=await candidateFor(row,files);
+      if(candidate)candidates.push(candidate);
+    }
     if(!candidates.length){
       messages.setConversationCursor({accountRef,conversationType,conversationId,lastMessageId:maxId,now});
       jobs.complete(job.id,now);
@@ -123,4 +150,4 @@ async function processNextConversationJob({
   }
 }
 
-module.exports={processNextConversationJob,eligible,dedupeKey};
+module.exports={processNextConversationJob,eligible,candidateFor,dedupeKey};

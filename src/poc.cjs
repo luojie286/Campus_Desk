@@ -22,8 +22,7 @@ const {processNextExecuteJob}=require('./worker/execute.cjs');
 const {processNextFileJob}=require('./worker/file.cjs');
 const {processNextConversationJob}=require('./worker/conversation.cjs');
 const {downloadOneBotFile}=require('./files/onebot.cjs');
-const {extractPdfText}=require('./files/pdf.cjs');
-const {suggestFromMessage}=require('./suggest/llm.cjs');
+const {extractFileText}=require('./files/extract.cjs');
 const {suggestFromConversation}=require('./suggest/conversation.cjs');
 const {createV2Handler}=require('./api/v2.cjs');
 fs.mkdirSync('.private',{recursive:true});
@@ -155,6 +154,7 @@ async function drainConversationJobs(){
       messages:messagesRepo,
       suggestions:suggestionsRepo,
       jobs:jobsRepo,
+      files:filesRepo,
       config,
       workerId,
       now:new Date().toISOString(),
@@ -170,14 +170,12 @@ async function drainFileJobs(){
     const result=await processNextFileJob({
       files:filesRepo,
       messages:messagesRepo,
-      suggestions:suggestionsRepo,
       jobs:jobsRepo,
       config,
       workerId,
       now:new Date().toISOString(),
       downloadFile:({fileId,fileName})=>downloadOneBotFile({fileId,fileName,config}),
-      extractText:buffer=>extractPdfText(buffer),
-      suggest:({payload})=>suggestFromMessage({payload,config}),
+      extractText:(buffer,{fileName,mimeType})=>extractFileText(buffer,{fileName,mimeType}),
       dir:'.private/files'
     });
     if(!result.processed)break;

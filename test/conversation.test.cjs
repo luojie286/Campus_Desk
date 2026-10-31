@@ -1,13 +1,19 @@
-const {test}=require('node:test');
+const {test,after}=require('node:test');
 const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const os=require('node:os');
+const path=require('node:path');
 const {openStore}=require('../src/core.cjs');
 const {applyMigrations}=require('../src/db/migrate.cjs');
 const {createMessageRepository}=require('../src/db/repositories/messages.cjs');
 const {createSuggestionRepository}=require('../src/db/repositories/suggestions.cjs');
 const {createJobRepository}=require('../src/db/repositories/jobs.cjs');
+const {createFileRepository}=require('../src/db/repositories/files.cjs');
 const {processNextConversationJob}=require('../src/worker/conversation.cjs');
 
 const now='2026-10-30T14:00:00.000Z';
+const testDir=fs.mkdtempSync(path.join(os.tmpdir(),'campus-desk-conversation-'));
+after(()=>fs.rmSync(testDir,{recursive:true,force:true}));
 const base={
   platform:'qq',adapterInstance:'onebot-main',accountRef:'7007',conversationType:'group',
   conversationId:'6318',senderId:'1278',sourceTime:now,receivedAt:now,kind:'text',
@@ -20,7 +26,8 @@ function setup(){
     store,
     messages:createMessageRepository(store.db),
     suggestions:createSuggestionRepository(store.db),
-    jobs:createJobRepository(store.db)
+    jobs:createJobRepository(store.db),
+    files:createFileRepository(store.db)
   };
 }
 function enqueue(jobs,runAt=now){
@@ -89,6 +96,32 @@ test('conversation: accepting a merged candidate links all source messages',asyn
   const accepted=suggestions.accept({id:rid,accountRef:'7007',createdAt:now});
   const links=store.db.prepare('SELECT message_id FROM todo_messages WHERE todo_id=? ORDER BY message_id').all(accepted.todo.id);
   assert.deepEqual(links.map(row=>row.message_id),[first.id,second.id]);
+  store.db.close();
+});
+test('conversation: extracted file text joins the same LLM batch',async()=>{
+  const {store,messages,suggestions,jobs,files}=setup();
+  const message=messages.insert({...base,sourceMessageId:'m-file',kind:'file',contentText:'Word 附件'});
+  const file=files.insert({
+    messageId:message.id,accountRef:'7007',platformFileId:'f1',fileName:'通知.docx',
+    mimeType:null,sizeBytes:100,createdAt:now
+  });
+  const textPath=path.join(testDir,'notice.txt');
+  fs.writeFileSync(textPath,'Word 通知正文：请提交推荐表。','utf8');
+  files.markTextExtracted({id:file.id,textPath,now});
+  enqueue(jobs);
+  let seen=null;
+  const result=await processNextConversationJob({
+    files,messages,suggestions,jobs,config:{},workerId:'w1',now,
+    suggest:async({payload})=>{
+      seen=payload;
+      return {actionable:true,thread_key:'docx-notice',title:'提交推荐表',summary:'Word 通知',category:'action',confidence:0.9,rationale:'附件',message_ids:[message.id]};
+    }
+  });
+  assert.equal(result.processed,true);
+  assert.equal(seen.messages.length,1);
+  assert.equal(seen.messages[0].text.includes('Word 通知正文'),true);
+  assert.equal(seen.messages[0].text.includes('附件'),true);
+  assert.equal(suggestions.list({accountRef:'7007',status:'pending'}).length,1);
   store.db.close();
 });
 test('conversation: a new message for the same conversation is debounced into one queued job',()=>{
