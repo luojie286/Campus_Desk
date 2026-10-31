@@ -2,7 +2,7 @@ const fs=require('node:fs');
 const http=require('node:http');
 const crypto=require('node:crypto');
 const path=require('node:path');
-const {openStore,extractLinks,sourceMatches,eventKey,canonicalUrl,findHeaderRowByContent,buildGeneralPlan,assertWritePreconditions,approvalCheck,digest,placeholderIsPresent,reservationCellEmpty,runBelongsToAccount}=require('./core.cjs');
+const {openStore,extractLinks,eventKey,canonicalUrl,findHeaderRowByContent,buildGeneralPlan,assertWritePreconditions,approvalCheck,digest,placeholderIsPresent,reservationCellEmpty,runBelongsToAccount}=require('./core.cjs');
 const {TencentSheet,column}=require('./tencent.cjs');
 const {resolveIdentity}=require('./documents/identity.cjs');
 const {prepareColumnAnalysis,analyzeColumns}=require('./llm.cjs');
@@ -15,6 +15,9 @@ const {createTaskRepository}=require('./db/repositories/tasks.cjs');
 const {createJobRepository}=require('./db/repositories/jobs.cjs');
 const {createClassificationRepository}=require('./db/repositories/classifications.cjs');
 const {createFileRepository}=require('./db/repositories/files.cjs');
+const {createSourceRepository}=require('./db/repositories/sources.cjs');
+const {createNotificationRepository}=require('./db/repositories/notifications.cjs');
+const contacts=require('./contacts/onebot.cjs');
 const {ingestEvent}=require('./intake/onebot.cjs');
 const {processNextClassifyJob}=require('./worker/classify.cjs');
 const {processNextPrepareJob}=require('./worker/prepare.cjs');
@@ -41,7 +44,9 @@ const suggestionsRepo=createSuggestionRepository(store.db);
 const jobsRepo=createJobRepository(store.db);
 const classificationsRepo=createClassificationRepository(store.db);
 const filesRepo=createFileRepository(store.db);
-const v2Handler=createV2Handler({messages:messagesRepo,suggestions:suggestionsRepo,tasks:tasksRepo,jobs:jobsRepo,files:filesRepo,config});
+const sourcesRepo=createSourceRepository(store.db);
+const notificationsRepo=createNotificationRepository(store.db);
+const v2Handler=createV2Handler({messages:messagesRepo,suggestions:suggestionsRepo,tasks:tasksRepo,jobs:jobsRepo,files:filesRepo,sources:sourcesRepo,notifications:notificationsRepo,contacts,config});
 const command=process.argv[2]||'status';
 let busy=false;
 // 收到链接后的自动准备：读表、定位身份、调用 DeepSeek、生成计划。
@@ -171,10 +176,11 @@ async function drainFileJobs(){
       files:filesRepo,
       messages:messagesRepo,
       jobs:jobsRepo,
+      notifications:notificationsRepo,
       config,
       workerId,
       now:new Date().toISOString(),
-      downloadFile:({fileId,fileName})=>downloadOneBotFile({fileId,fileName,config}),
+      downloadFile:({fileId,fileName,mimeType})=>downloadOneBotFile({fileId,fileName,mimeType,config}),
       extractText:(buffer,{fileName,mimeType})=>extractFileText(buffer,{fileName,mimeType}),
       dir:'.private/files'
     });
@@ -216,11 +222,17 @@ async function drainExecuteJobs(){
   }
 }
 function acceptEvent(e){
-  if(!sourceMatches(e,config.source))return {accepted:0,reason:config.source.id?'source_filtered':'source_not_configured'};
+  const accountRef=config.account_id?String(config.account_id):'';
+  const matched=sourcesRepo.matchEvent(e,{accountRef});
+  if(!matched){
+    const configured=sourcesRepo.list({accountRef}).length>0;
+    return {accepted:0,reason:configured?'source_filtered':'source_not_configured'};
+  }
+  const source=sourcesRepo.toLegacySource(matched);
   // 消息中心开启时先保存原文并排队分类/候选；这一步不打开浏览器。
   let ingested=null;
   if(config.messageCenter){
-    ingested=ingestEvent({event:e,config,messages:messagesRepo,jobs:jobsRepo,files:filesRepo});
+    ingested=ingestEvent({event:e,config,messages:messagesRepo,jobs:jobsRepo,files:filesRepo,source});
     if(ingested.reason==='source_filtered')return {accepted:0,reason:'source_filtered'};
     if(ingested.reason==='missing_stable_id')return {accepted:0,reason:'missing_stable_id'};
   }
@@ -499,6 +511,11 @@ async function main(){
   else if(command==='serve'){
     store.recover();
     jobsRepo.recoverExpired(new Date().toISOString());
+    const accountRef=config.account_id?String(config.account_id):'';
+    if(accountRef&&sourcesRepo.list({accountRef}).length===0){
+      sourcesRepo.seedFromConfig({accountRef,source:config.source,displayName:config.source_name||null});
+    }
+    if(accountRef)messagesRepo.backfillNames({accountRef});
     const setupNonce=crypto.randomBytes(20).toString('hex');
     const setupBase='/setup/'+setupNonce;
     fs.writeFileSync('.private/setup-url.txt','http://127.0.0.1:'+config.port+setupBase);
@@ -527,7 +544,7 @@ async function main(){
       if(req.method==='GET'&&req.url==='/health')return respond(200,{running:true,sourceConfigured:!!config.source.id,busy});
       const requestUrl=new URL(req.url||'/','http://127.0.0.1');
       const pathname=requestUrl.pathname;
-      if(pathname.startsWith('/v1/messages')||pathname.startsWith('/v1/suggestions')||pathname.startsWith('/v1/todos')||pathname.startsWith('/v1/tasks')||pathname==='/v1/sources'){
+      if(pathname.startsWith('/v1/messages')||pathname.startsWith('/v1/suggestions')||pathname.startsWith('/v1/todos')||pathname.startsWith('/v1/tasks')||pathname==='/v1/sources'||pathname.startsWith('/v1/listen-sources')||pathname.startsWith('/v1/notifications')||pathname.startsWith('/v1/contacts/')){
         const handled=await v2Handler(req,res,pathname,requestUrl.searchParams);
         if(handled)return;
       }

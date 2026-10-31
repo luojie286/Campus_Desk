@@ -18,7 +18,7 @@ function eligible(message){
 }
 
 async function candidateFor(message,files){
-  if(message.kind==='file'){
+  if(message.kind==='file'||message.kind==='image'){
     if(!files)return null;
     const rows=files.listForMessage({messageId:message.id,accountRef:message.account_ref});
     const parts=[];

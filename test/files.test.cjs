@@ -9,7 +9,9 @@ const {createMessageRepository}=require('../src/db/repositories/messages.cjs');
 const {createSuggestionRepository}=require('../src/db/repositories/suggestions.cjs');
 const {createJobRepository}=require('../src/db/repositories/jobs.cjs');
 const {createFileRepository}=require('../src/db/repositories/files.cjs');
+const {createNotificationRepository}=require('../src/db/repositories/notifications.cjs');
 const {ingestEvent}=require('../src/intake/onebot.cjs');
+
 const {processNextFileJob}=require('../src/worker/file.cjs');
 
 const now='2026-10-30T11:00:00.000Z';
@@ -33,7 +35,8 @@ function setup(){
     messages:createMessageRepository(store.db),
     suggestions:createSuggestionRepository(store.db),
     jobs:createJobRepository(store.db),
-    files:createFileRepository(store.db)
+    files:createFileRepository(store.db),
+    notifications:createNotificationRepository(store.db)
   };
 }
 test('files: a OneBot file segment is stored and queued without downloading in intake',()=>{
@@ -57,6 +60,22 @@ test('files: a OneBot file segment is stored and queued without downloading in i
   const queued=store.db.prepare("SELECT * FROM jobs WHERE type='process_file'").all();
   assert.equal(queued.length,1);
   assert.equal(JSON.parse(queued[0].payload_json).fileId,rows[0].id);
+  store.db.close();
+});
+test('files: an image segment is stored with image MIME and queued for OCR',()=>{
+  const {store,messages,jobs,files}=setup();
+  const event={
+    post_type:'message',message_type:'group',self_id:7007,group_id:6318,user_id:1278,
+    message_id:'img-1',time:1790000000,
+    message:[{type:'image',data:{file:'abc.image',file_id:'image-1'}}]
+  };
+  const result=ingestEvent({event,config,messages,jobs,files,now});
+  const message=messages.get({id:result.messageId,accountRef:'7007'});
+  assert.equal(message.kind,'image');
+  const rows=files.listForMessage({messageId:message.id,accountRef:'7007'});
+  assert.equal(rows.length,1);
+  assert.equal(rows[0].mime_type,'image/*');
+  assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE type='process_file'").get().n,1);
   store.db.close();
 });
 test('files: PDF text is extracted and queued back into conversation aggregation',async()=>{
@@ -128,6 +147,27 @@ test('files: an already extracted file recovers from a stale failure state',asyn
   assert.equal(current.download_state,'downloaded');
   assert.equal(current.error,null);
   assert.equal(store.db.prepare("SELECT COUNT(*) AS n FROM jobs WHERE type='suggest_conversation'").get().n,1);
+  store.db.close();
+});
+test('files: unsupported formats are ignored and create a notification',async()=>{
+  const {store,messages,suggestions,jobs,files,notifications}=setup();
+  const message=messages.insert({...baseMessage,sourceMessageId:'m-zip',kind:'file',contentText:'附件'});
+  const file=files.insert({
+    messageId:message.id,accountRef:'7007',platformFileId:'file-zip',fileName:'材料.zip',
+    mimeType:'application/zip',sizeBytes:100,createdAt:now
+  });
+  jobs.enqueue({type:'process_file',payload:{fileId:file.id,messageId:message.id,accountRef:'7007'},runAt:now,maxAttempts:1});
+  const result=await processNextFileJob({
+    files,messages,jobs,notifications,config,workerId:'w1',now,
+    downloadFile:async()=>Buffer.from('zip'),
+    extractText:async()=>{throw Error('should_not_extract');},
+    dir:testDir
+  });
+  assert.equal(result.state,'unsupported');
+  assert.equal(files.get({id:file.id,accountRef:'7007'}).text_state,'unsupported');
+  assert.equal(suggestions.listForMessage({messageId:message.id,accountRef:'7007'}).length,0);
+  assert.equal(notifications.unreadCount({accountRef:'7007'}),1);
+  assert.equal(notifications.list({accountRef:'7007'})[0].kind,'attachment_ignored');
   store.db.close();
 });
 test('files: a PDF with no extractable text is marked empty and creates no candidate',async()=>{

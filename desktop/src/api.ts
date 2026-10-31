@@ -1,4 +1,4 @@
-import type {Message, Operation, Plan, SourceRow, Suggestion, Task, Todo} from './types';
+import type {ContactFriend, ContactGroup, ContactMember, ListenSource, Message, Notification, Operation, Plan, SourceRow, Suggestion, Task, Todo} from './types';
 import {currentToken, initializeToken, isTauriApp, persistToken, removeToken} from './secure';
 
 const DEFAULT_BASE = '/api';
@@ -73,6 +73,57 @@ export async function checkHealth() {
 
 export async function loadSources() {
   return request<{items: SourceRow[]}>('/v1/sources');
+}
+
+export async function loadNotifications(unreadOnly = false) {
+  return request<{items: Notification[]; unread: number}>(`/v1/notifications${unreadOnly?'?unread=1':''}`);
+}
+
+export async function markNotificationRead(id: number) {
+  return request<{ok: boolean}>(`/v1/notifications/${id}/read`, {method: 'POST', body: '{}'});
+}
+
+export async function loadListenSources() {
+  return request<{items: ListenSource[]}>('/v1/listen-sources');
+}
+
+export async function addListenSource(input: {
+  conversation_type: 'group' | 'private';
+  conversation_id: string;
+  sender_id?: string;
+  display_name?: string;
+}) {
+  return request<{source: ListenSource}>('/v1/listen-sources', {
+    method: 'POST',
+    body: JSON.stringify(input)
+  });
+}
+
+export async function deleteListenSource(id: number) {
+  return request<{ok: boolean}>(`/v1/listen-sources/${id}`, {method: 'DELETE'});
+}
+
+export async function setListenSourceEnabled(id: number, enabled: boolean) {
+  return request<{ok: boolean}>(`/v1/listen-sources/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({enabled})
+  });
+}
+
+export async function loadContactGroups() {
+  return request<{items: ContactGroup[]}>('/v1/contacts/groups');
+}
+
+export async function loadGroupMembers(groupId: string) {
+  return request<{items: ContactMember[]}>(`/v1/contacts/groups/${groupId}/members`);
+}
+
+export async function loadFriends() {
+  return request<{items: ContactFriend[]}>('/v1/contacts/friends');
+}
+
+export async function refreshContactNames() {
+  return request<{updated: number}>('/v1/contacts/refresh', {method: 'POST', body: '{}'});
 }
 
 export async function loadMessages(limit = 80) {

@@ -402,6 +402,37 @@ const MIGRATIONS=[
         GROUP BY account_ref,conversation_type,conversation_id;
       `);
     }
+  },
+  {
+    version:6,
+    name:'contact_names',
+    up(db){
+      // 群名/群备注和好友备注来自 OneBot 联系人缓存；消息表保留快照，昵称变化不影响历史。
+      db.exec(`
+        ALTER TABLE messages ADD COLUMN sender_name TEXT;
+        ALTER TABLE messages ADD COLUMN conversation_name TEXT;
+        CREATE INDEX IF NOT EXISTS idx_sources_account ON sources(account_ref,enabled);
+      `);
+    }
+  },
+  {
+    version:7,
+    name:'notifications',
+    up(db){
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS notifications(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          account_ref TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          title TEXT NOT NULL,
+          body TEXT,
+          read_at TEXT,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_notifications_unread
+          ON notifications(account_ref,read_at,created_at DESC);
+      `);
+    }
   }
 ];
 

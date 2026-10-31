@@ -10,8 +10,8 @@ export interface MessageFile {
 export interface Message {
   id: number;
   platform: string;
-  conversation: { type: string; id: string };
-  sender: { id: string };
+  conversation: { type: string; id: string; name?: string | null };
+  sender: { id: string; name?: string | null };
   source_time: string | null;
   received_at: string;
   kind: string;
@@ -50,8 +50,49 @@ export interface SourceRow {
   total: number;
   unread: number;
   last_at: string;
+  conversation_name?: string | null;
   last_sender_id: string;
+  last_sender_name?: string | null;
   last_text: string | null;
+}
+
+export interface Notification {
+  id: number;
+  kind: string;
+  title: string;
+  body: string | null;
+  read: boolean;
+  created_at: string;
+}
+
+export interface ListenSource {
+  id: number;
+  platform: string;
+  account_ref: string;
+  conversation_type: 'group' | 'private';
+  conversation_id: string;
+  sender_id: string;
+  display_name: string | null;
+  enabled: boolean;
+}
+
+export interface ContactGroup {
+  id: string;
+  name: string;
+}
+
+export interface ContactMember {
+  id: string;
+  name: string;
+  nickname: string | null;
+  card: string | null;
+}
+
+export interface ContactFriend {
+  id: string;
+  name: string;
+  nickname: string | null;
+  remark: string | null;
 }
 
 export interface Todo {

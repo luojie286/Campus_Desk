@@ -51,7 +51,7 @@ async function processNextClassifyJob({messages,suggestions,jobs,classifications
         createdTasks.push(task);
         if(task.created)jobs.enqueue({type:'prepare_task',payload:{taskId:task.id,accountRef:task.account_ref},runAt:now});
       }
-    }else if(message.kind!=='file'){
+    }else if(message.kind==='text'){
       // 同一会话的消息先防抖合并，再由会话 worker 过滤闲聊并生成/更新候选。
       const runAt=new Date(new Date(now).getTime()+30000).toISOString();
       jobs.enqueueUnique({

@@ -3,7 +3,7 @@
 const fs=require('node:fs/promises');
 const path=require('node:path');
 const crypto=require('node:crypto');
-const {isSupportedFile}=require('../files/extract.cjs');
+const {isSupportedFile,kindOf}=require('../files/extract.cjs');
 
 const MAX_FILE_BYTES=25*1024*1024;
 
@@ -50,6 +50,7 @@ async function processNextFileJob({
   files,
   messages,
   jobs,
+  notifications=null,
   config,
   workerId,
   now=new Date().toISOString(),
@@ -75,11 +76,20 @@ async function processNextFileJob({
       files.markTextExtracted({id:file.id,textPath:file.text_path,now});
     }else{
       stage='download';
-      const buffer=await downloadFile({fileId:file.platform_file_id,fileName:file.file_name,config});
+      const buffer=await downloadFile({fileId:file.platform_file_id,fileName:file.file_name,mimeType:file.mime_type,config});
       if(!Buffer.isBuffer(buffer)||!buffer.length)throw Error('file_content_empty');
       if(buffer.length>MAX_FILE_BYTES)throw Error('file_too_large');
       if(!isSupportedFile(file.file_name,file.mime_type)){
         files.markTextUnsupported({id:file.id,reason:'unsupported_file_type',now});
+        if(notifications){
+          notifications.insert({
+            accountRef:file.account_ref,
+            kind:'attachment_ignored',
+            title:'附件格式不支持，已忽略',
+            body:file.file_name||'未命名附件',
+            createdAt:now
+          });
+        }
         jobs.complete(job.id,now);
         return {processed:true,jobId:job.id,state:'unsupported'};
       }
@@ -97,6 +107,15 @@ async function processNextFileJob({
       const clean=String(text||'').replace(/\u0000/g,'').trim();
       if(!clean){
         files.markTextEmpty({id:file.id,now});
+        if(notifications&&kindOf(file.file_name,file.mime_type)==='image'){
+          notifications.insert({
+            accountRef:file.account_ref,
+            kind:'image_no_text',
+            title:'图片没有识别到文字',
+            body:file.file_name||'未命名图片',
+            createdAt:now
+          });
+        }
         jobs.complete(job.id,now);
         return {processed:true,jobId:job.id,state:'empty'};
       }

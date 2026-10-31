@@ -15,11 +15,12 @@ function createMessageRepository(db){
       try{
         const result=db.prepare(`INSERT OR IGNORE INTO messages
           (platform,adapter_instance,account_ref,conversation_type,conversation_id,sender_id,
-           source_message_id,source_time,received_at,kind,content_text,content_json,link_json,
+           sender_name,conversation_name,source_message_id,source_time,received_at,kind,content_text,content_json,link_json,
            completeness,identity_quality,created_at,updated_at)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
           .run(message.platform,message.adapterInstance,message.accountRef,message.conversationType,
-            message.conversationId,message.senderId,message.sourceMessageId,message.sourceTime||null,
+            message.conversationId,message.senderId,message.senderName||null,message.conversationName||null,
+            message.sourceMessageId,message.sourceTime||null,
             receivedAt,message.kind||'text',message.contentText||null,jsonText(message.contentJson),
             jsonText(message.linkJson),message.completeness||null,message.identityQuality||null,
             receivedAt,receivedAt);
@@ -81,9 +82,13 @@ function createMessageRepository(db){
       return db.prepare(`SELECT m.conversation_type,m.conversation_id,COUNT(*) AS total,
         SUM(CASE WHEN m.read_at IS NULL THEN 1 ELSE 0 END) AS unread,
         MAX(m.received_at) AS last_at,
+        MAX(m.conversation_name) AS conversation_name,
         (SELECT x.sender_id FROM messages x
           WHERE x.account_ref=m.account_ref AND x.conversation_type=m.conversation_type AND x.conversation_id=m.conversation_id
           ORDER BY x.received_at DESC,x.id DESC LIMIT 1) AS last_sender_id,
+        (SELECT x.sender_name FROM messages x
+          WHERE x.account_ref=m.account_ref AND x.conversation_type=m.conversation_type AND x.conversation_id=m.conversation_id
+          ORDER BY x.received_at DESC,x.id DESC LIMIT 1) AS last_sender_name,
         (SELECT x.content_text FROM messages x
           WHERE x.account_ref=m.account_ref AND x.conversation_type=m.conversation_type AND x.conversation_id=m.conversation_id
           ORDER BY x.received_at DESC,x.id DESC LIMIT 1) AS last_text
@@ -111,6 +116,29 @@ function createMessageRepository(db){
       return db.prepare(`SELECT * FROM conversation_cursors
         WHERE account_ref=? AND conversation_type=? AND conversation_id=?`)
         .get(String(accountRef),String(conversationType),String(conversationId));
+    },
+    backfillNames({accountRef}){
+      db.prepare(`UPDATE messages SET conversation_name=(
+          SELECT s.display_name FROM sources s
+          WHERE s.account_ref=messages.account_ref
+            AND s.conversation_type=messages.conversation_type
+            AND s.conversation_id=messages.conversation_id
+            AND s.display_name IS NOT NULL
+          ORDER BY s.updated_at DESC LIMIT 1
+        )
+        WHERE account_ref=? AND conversation_name IS NULL`).run(String(accountRef));
+      const rows=db.prepare(`SELECT m.id,v.raw_json FROM messages m
+        LEFT JOIN message_versions v ON v.message_id=m.id AND v.version=1
+        WHERE m.account_ref=? AND m.sender_name IS NULL AND v.raw_json IS NOT NULL`).all(String(accountRef));
+      const update=db.prepare('UPDATE messages SET sender_name=? WHERE id=? AND sender_name IS NULL');
+      for(const row of rows){
+        try{
+          const event=JSON.parse(row.raw_json);
+          const name=event?.sender?.card||event?.sender?.nickname||null;
+          if(name)update.run(String(name),row.id);
+        }catch{}
+      }
+      return rows.length;
     },
     messagesAfter({accountRef,conversationType,conversationId,afterId=0,limit=20}){
       const safeLimit=Math.min(Math.max(Number(limit)||20,1),50);

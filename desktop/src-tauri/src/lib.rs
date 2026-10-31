@@ -42,3 +42,16 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running campus desk");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_credential_roundtrip() {
+        let test_entry = Entry::new("campus-desk-test", "api-token").expect("entry");
+        test_entry.set_password("token-for-test").expect("save");
+        assert_eq!(test_entry.get_password().expect("read"), "token-for-test");
+        test_entry.delete_credential().expect("delete");
+    }
+}

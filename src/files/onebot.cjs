@@ -38,11 +38,12 @@ function isAllowedLocalPath(filePath,config){
   return parts.includes('tencent files')&&parts.includes('napcat');
 }
 
-async function downloadOneBotFile({fileId,fileName,config={},fetchImpl=fetch}){
+async function downloadOneBotFile({fileId,fileName,mimeType=null,config={},fetchImpl=fetch}){
   const base=String(config.onebot?.api_base||DEFAULT_API_BASE).replace(/\/+$/,'');
   const token=config.onebot?.token||config.token;
   if(!token)throw Error('onebot_token_missing');
-  const response=await fetchImpl(base+'/get_file',{
+  const isImage=String(mimeType||'').startsWith('image/')||/\.(?:png|jpe?g|webp|bmp)$/i.test(String(fileName||''));
+  const response=await fetchImpl(base+'/'+(isImage?'get_image':'get_file'),{
     method:'POST',
     headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},
     body:JSON.stringify({file_id:fileId,file:fileName}),
@@ -53,14 +54,17 @@ async function downloadOneBotFile({fileId,fileName,config={},fetchImpl=fetch}){
   try{json=await response.json();}catch{throw Error('onebot_get_file_invalid_json');}
   if(json?.status!=='ok')throw Error('onebot_get_file_failed');
   const data=json.data||{};
-  if(data.base64)return Buffer.from(stripDataUrl(data.base64),'base64');
-  if(data.url){
-    const local=localPathOf(data.url);
+  if(data.base64)return Buffer.from(stripDataUrl(data.base64).replace(/^base64:\/\//,''),'base64');
+  const localCandidate=data.url||data.file;
+  if(localCandidate){
+    const local=localPathOf(localCandidate);
     if(local){
       if(!fs.existsSync(local))throw Error('onebot_local_file_missing');
       if(!isAllowedLocalPath(local,config))throw Error('file_path_not_allowed');
       return fs.readFileSync(local);
     }
+  }
+  if(data.url){
     const fileResponse=await fetchImpl(String(data.url),{signal:AbortSignal.timeout(30000)});
     if(!fileResponse.ok)throw Error('onebot_file_http_'+fileResponse.status);
     return Buffer.from(await fileResponse.arrayBuffer());

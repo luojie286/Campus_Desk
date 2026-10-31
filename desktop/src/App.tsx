@@ -1,6 +1,7 @@
 import {useCallback, useEffect, useMemo, useState} from 'react';
 import type {FormEvent} from 'react';
 import {
+  Bell,
   CheckCircle2,
   ChevronRight,
   CircleAlert,
@@ -16,10 +17,13 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Trash2,
+  UserRound,
+  Users,
   X
 } from 'lucide-react';
 import * as api from './api';
-import type {Message, Plan, SourceRow, Suggestion, Task, Todo, View} from './types';
+import type {ContactFriend, ContactGroup, ContactMember, ListenSource, Message, Notification, Plan, SourceRow, Suggestion, Task, Todo, View} from './types';
 
 const REFRESH_MS = 5000;
 
@@ -65,7 +69,9 @@ const ERROR_LABELS: Record<string, string> = {
   answers_required: '请先填写需要补充的信息。',
   invalid_answer: '提交的信息不完整或包含未知字段。',
   suggestion_already_decided: '这条候选已经处理过了，请刷新。',
-  token_missing: '还没有配置访问令牌。'
+  token_missing: '还没有配置访问令牌。',
+  onebot_unreachable: '连接不到 NapCat HTTP API（9088）。请确认 NapCat 已登录，且 OneBot HTTP 服务已启动。',
+  onebot_action_failed: 'NapCat 没有返回联系人列表，请确认 QQ 已登录并稍后重试。'
 };
 
 function errorText(error: unknown) {
@@ -121,6 +127,7 @@ function fileStateLabel(state: string) {
 }
 
 function sourceLabel(source: SourceRow) {
+  if (source.conversation_name) return source.conversation_name;
   return source.conversation_type === 'group' ? `群 ${source.conversation_id}` : `私聊 ${source.conversation_id}`;
 }
 
@@ -137,6 +144,9 @@ function toneFor(value: string) {
 function App() {
   const [view, setView] = useState<View>('inbox');
   const [sources, setSources] = useState<SourceRow[]>([]);
+  const [listenSources, setListenSources] = useState<ListenSource[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
@@ -162,14 +172,18 @@ function App() {
   const refresh = useCallback(async () => {
     if (!api.readCredentials().token) return;
     try {
-      const [sourceResult, messageResult, suggestionResult, todoResult, taskResult] = await Promise.all([
+      const [sourceResult, messageResult, suggestionResult, todoResult, taskResult, listenResult, notificationResult] = await Promise.all([
         api.loadSources(),
         api.loadMessages(),
         api.loadSuggestions(),
         api.loadTodos(),
-        api.loadTasks()
+        api.loadTasks(),
+        api.loadListenSources(),
+        api.loadNotifications()
       ]);
       setSources(sourceResult.items);
+      setListenSources(listenResult.items);
+      setNotifications(notificationResult.items);
       setMessages(messageResult.items);
       setSuggestions(suggestionResult.items);
       setTodos(todoResult.items);
@@ -239,6 +253,7 @@ function App() {
 
   const activeTasks = tasks.filter(taskIsActive);
   const unreadCount = sources.reduce((sum, source) => sum + source.unread, 0);
+  const unreadNotifications = notifications.filter(item => !item.read).length;
   const selectedSource = sources.find(source => source.conversation_id === selectedConversation) || null;
 
   const visibleMessages = useMemo(() => {
@@ -299,6 +314,15 @@ function App() {
   function closeDetail() {
     setSelectedMessageId(null);
     setSelectedTaskId(null);
+  }
+
+  async function readNotification(id: number) {
+    try {
+      await api.markNotificationRead(id);
+      await refresh();
+    } catch (caught) {
+      setError(errorText(caught));
+    }
   }
 
   async function saveLogin(event: FormEvent) {
@@ -407,7 +431,7 @@ function App() {
               <span className={`avatar tone-${toneFor(source.conversation_id)}`}>{source.conversation_type === 'group' ? '群' : '私'}</span>
               <span className="source-copy">
                 <strong>{sourceLabel(source)}</strong>
-                <span>{source.last_text || '暂无正文'}</span>
+                <span>{source.last_sender_name ? `${source.last_sender_name}: ` : ''}{source.last_text || '暂无正文'}</span>
               </span>
               <span className={`source-count ${source.unread ? 'has-unread' : ''}`}>{source.unread || source.total}</span>
             </button>
@@ -464,6 +488,10 @@ function App() {
                 未读 <span>{unreadCount}</span>
               </button>
             )}
+            <button className="icon-button notification-button" onClick={() => setNotificationsOpen(true)} aria-label="通知">
+              <Bell size={17} />
+              {unreadNotifications > 0 && <span className="notification-badge">{unreadNotifications}</span>}
+            </button>
             <button className="icon-button" onClick={() => refresh()} disabled={busy} aria-label="刷新">
               <RefreshCw size={17} className={busy ? 'spin' : ''} />
             </button>
@@ -550,6 +578,8 @@ function App() {
                 onSave={saveLogin}
                 onTest={testHealth}
                 onForget={forgetToken}
+                listenSources={listenSources}
+                onSourcesChanged={() => refresh()}
               />
             )}
           </div>
@@ -571,6 +601,29 @@ function App() {
           </div>
         )}
       </main>
+
+      {notificationsOpen && (
+        <div className="modal-layer" role="dialog" aria-modal="true" onClick={() => setNotificationsOpen(false)}>
+          <div className="modal notification-modal" onClick={event => event.stopPropagation()}>
+            <button className="modal-close" onClick={() => setNotificationsOpen(false)} aria-label="关闭通知"><X size={18} /></button>
+            <span className="eyebrow">系统通知</span>
+            <h2>通知</h2>
+            {!notifications.length && <p className="muted">暂时没有通知。</p>}
+            <div className="notification-list">
+              {notifications.map(item => (
+                <div className={`notification-item ${item.read ? 'is-read' : ''}`} key={item.id}>
+                  <div>
+                    <strong>{item.title}</strong>
+                    {item.body && <p>{item.body}</p>}
+                    <span>{formatDate(item.created_at)}</span>
+                  </div>
+                  {!item.read && <button className="button ghost small" onClick={() => readNotification(item.id)}>标记已读</button>}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {(detailTask || detailMessage) && (
         <div className="modal-layer" role="dialog" aria-modal="true" onClick={closeDetail}>
@@ -625,8 +678,8 @@ function MessageCard({
       <span className={`avatar message-avatar tone-${toneFor(message.sender.id)}`}>{message.sender.id.slice(-2)}</span>
       <div className="message-body">
         <div className="message-head">
-          <strong>成员 {message.sender.id}</strong>
-          <span>{message.conversation.type === 'group' ? `群 ${message.conversation.id}` : '私聊'}</span>
+          <strong>成员 {message.sender.name || message.sender.id}</strong>
+          <span>{message.conversation.name || (message.conversation.type === 'group' ? `群 ${message.conversation.id}` : '私聊')}</span>
           <span className="time">{formatDate(message.received_at)}</span>
           {!message.read && <span className="unread-dot" />}
         </div>
@@ -709,8 +762,8 @@ function MessageDetail({
       <div className="detail-head">
         <div>
           <span className="eyebrow">消息详情</span>
-          <h2>成员 {message.sender.id}</h2>
-          <p>{message.conversation.type === 'group' ? `群 ${message.conversation.id}` : '私聊'} · {formatDate(message.received_at)}</p>
+          <h2>成员 {message.sender.name || message.sender.id}</h2>
+          <p>{message.conversation.name || (message.conversation.type === 'group' ? `群 ${message.conversation.id}` : '私聊')} · {formatDate(message.received_at)}</p>
         </div>
         <span className={`status-pill ${message.read ? '' : 'state-awaiting_approval'}`}>{message.read ? '已读' : '未读'}</span>
       </div>
@@ -909,7 +962,9 @@ function SettingsView({
   onTokenChange,
   onSave,
   onTest,
-  onForget
+  onForget,
+  listenSources,
+  onSourcesChanged
 }: {
   base: string;
   token: string;
@@ -920,6 +975,8 @@ function SettingsView({
   onSave: (event: FormEvent) => void;
   onTest: () => void;
   onForget: () => void;
+  listenSources: ListenSource[];
+  onSourcesChanged: () => void;
 }) {
   return (
     <div className="settings-wrap">
@@ -955,6 +1012,182 @@ function SettingsView({
         <p>消息、附件和审批都保存在本机 SQLite；前端只读取消息和计划，不直接访问腾讯账号或浏览器会话。</p>
         <p>访问令牌存放在浏览器 localStorage，仅适合本机开发。Tauri 版本会迁移到系统安全存储。</p>
       </div>
+      <ListenSourceManager sources={listenSources} onChanged={onSourcesChanged} />
+    </div>
+  );
+}
+
+function ListenSourceManager({sources,onChanged}: {sources: ListenSource[]; onChanged: () => void}) {
+  const [open,setOpen]=useState(false);
+  const [mode,setMode]=useState<'group'|'private'>('group');
+  const [groups,setGroups]=useState<ContactGroup[]>([]);
+  const [friends,setFriends]=useState<ContactFriend[]>([]);
+  const [members,setMembers]=useState<ContactMember[]>([]);
+  const [group,setGroup]=useState('');
+  const [member,setMember]=useState('');
+  const [friend,setFriend]=useState('');
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState('');
+
+  async function openPicker() {
+    setOpen(true);
+    setError('');
+    setLoading(true);
+    try {
+      const [groupResult,friendResult]=await Promise.all([api.loadContactGroups(),api.loadFriends()]);
+      setGroups(groupResult.items);
+      setFriends(friendResult.items);
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function chooseGroup(id: string) {
+    setGroup(id);
+    setMember('');
+    setMembers([]);
+    if (!id) return;
+    setLoading(true);
+    setError('');
+    try {
+      const result=await api.loadGroupMembers(id);
+      setMembers(result.items);
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function addSource() {
+    const selectedGroup=groups.find(item=>item.id===group);
+    const selectedFriend=friends.find(item=>item.id===friend);
+    if (mode==='group'&&!selectedGroup) { setError('请选择群聊'); return; }
+    if (mode==='private'&&!selectedFriend) { setError('请选择好友'); return; }
+    setLoading(true);
+    setError('');
+    try {
+      await api.addListenSource({
+        conversation_type:mode,
+        conversation_id:mode==='group'?selectedGroup!.id:selectedFriend!.id,
+        sender_id:mode==='group'?member:'',
+        display_name:mode==='group'?selectedGroup!.name:selectedFriend!.name
+      });
+      setOpen(false);
+      setGroup('');
+      setMember('');
+      setFriend('');
+      onChanged();
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function removeSource(id: number) {
+    setLoading(true);
+    setError('');
+    try {
+      await api.deleteListenSource(id);
+      onChanged();
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function refreshNames() {
+    setLoading(true);
+    setError('');
+    try {
+      await api.refreshContactNames();
+      onChanged();
+    } catch (caught) {
+      setError(errorText(caught));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="settings-card listener-card">
+      <div className="settings-head">
+        <span className="header-icon"><Users size={18} /></span>
+        <div>
+          <h2>监听对象</h2>
+          <p>只接收这里列出的群或 QQ 好友；名称来自 OneBot 的群名、群备注和好友备注。</p>
+        </div>
+        <button className="button primary small" onClick={openPicker} disabled={loading}>添加监听</button>
+      </div>
+      <div className="listener-list">
+        {!sources.length && <p className="muted">还没有监听对象。添加一个群聊或好友后才能接收消息。</p>}
+        {sources.map(source=>(
+          <div className="listener-row" key={source.id}>
+            <span className={`avatar tone-${toneFor(source.conversation_id)}`}>{source.conversation_type==='group'?'群':'私'}</span>
+            <div className="listener-copy">
+              <strong>{source.display_name || (source.conversation_type==='group'?`群 ${source.conversation_id}`:`QQ ${source.conversation_id}`)}</strong>
+              <span>
+                {source.conversation_type==='group'?`群 ${source.conversation_id}`:`QQ ${source.conversation_id}`}
+                {source.sender_id?` · 仅成员 ${source.sender_id}`:' · 全部成员'}
+              </span>
+            </div>
+            <button className="icon-button subtle" onClick={()=>removeSource(source.id)} disabled={loading} aria-label="删除监听对象"><Trash2 size={15} /></button>
+          </div>
+        ))}
+      </div>
+      <div className="listener-actions">
+        <button className="button ghost small" onClick={refreshNames} disabled={loading}><RefreshCw size={13} className={loading?'spin':''} /> 刷新名称</button>
+        {error && <span className="listener-error">{error}</span>}
+      </div>
+
+      {open && (
+        <div className="modal-layer" role="dialog" aria-modal="true" onClick={()=>setOpen(false)}>
+          <div className="modal source-modal" onClick={event=>event.stopPropagation()}>
+            <button className="modal-close" onClick={()=>setOpen(false)} aria-label="关闭"><X size={18} /></button>
+            <span className="eyebrow">监听对象</span>
+            <h2>添加群聊或好友</h2>
+            <div className="segmented">
+              <button className={mode==='group'?'is-active':''} onClick={()=>setMode('group')}><Users size={14} /> 群聊</button>
+              <button className={mode==='private'?'is-active':''} onClick={()=>setMode('private')}><UserRound size={14} /> 好友</button>
+            </div>
+            {mode==='group' ? (
+              <>
+                <label className="field">
+                  <span>选择群聊</span>
+                  <select value={group} onChange={event=>chooseGroup(event.target.value)} disabled={loading}>
+                    <option value="">请选择群聊</option>
+                    {groups.map(item=><option value={item.id} key={item.id}>{item.name}（{item.id}）</option>)}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>只监听某个成员（可选）</span>
+                  <select value={member} onChange={event=>setMember(event.target.value)} disabled={loading||!group}>
+                    <option value="">整个群</option>
+                    {members.map(item=><option value={item.id} key={item.id}>{item.name}（{item.id}）</option>)}
+                  </select>
+                </label>
+              </>
+            ) : (
+              <label className="field">
+                <span>选择好友</span>
+                <select value={friend} onChange={event=>setFriend(event.target.value)} disabled={loading}>
+                  <option value="">请选择好友</option>
+                  {friends.map(item=><option value={item.id} key={item.id}>{item.name}（{item.id}）</option>)}
+                </select>
+              </label>
+            )}
+            {error && <div className="callout callout-error"><span>{error}</span><button className="button ghost small" onClick={openPicker} disabled={loading}>重试</button></div>}
+            <div className="detail-actions">
+              <button className="button primary" onClick={addSource} disabled={loading}>添加监听</button>
+              <button className="button ghost" onClick={()=>setOpen(false)}>取消</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -539,6 +539,84 @@ input:focus-visible {
   border-color: var(--line-strong);
 }
 
+.notification-button {
+  position: relative;
+}
+
+.notification-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: grid;
+  place-items: center;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  color: #fff;
+  font-size: 8px;
+  font-weight: 600;
+  background: var(--orange);
+  border: 2px solid #fff;
+  border-radius: 999px;
+}
+
+.notification-modal {
+  width: min(560px, 100%);
+}
+
+.notification-modal h2 {
+  margin: 5px 0 14px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.notification-list {
+  display: grid;
+  gap: 7px;
+  max-height: 52vh;
+  overflow: auto;
+}
+
+.notification-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 12px;
+  background: #fcfaf7;
+  border: 1px solid #f0e4db;
+  border-radius: 11px;
+}
+
+.notification-item.is-read {
+  background: #fafafa;
+  border-color: var(--line);
+  opacity: 0.7;
+}
+
+.notification-item strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.notification-item p {
+  margin: 3px 0 0;
+  color: var(--text-2);
+  font-size: 10px;
+}
+
+.notification-item span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.notification-item .button {
+  flex-shrink: 0;
+}
+
 .main-scroll {
   flex: 1;
   min-height: 0;
@@ -1572,6 +1650,120 @@ input:focus-visible {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.7;
+}
+
+.listener-card {
+  grid-column: 1 / -1;
+}
+
+.listener-card .settings-head {
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.listener-card .settings-head > .button {
+  margin-left: auto;
+}
+
+.listener-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.listener-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  background: #fafafa;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+}
+
+.listener-copy {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.listener-copy strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.listener-copy span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.listener-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.listener-error {
+  color: var(--red);
+  font-size: 10px;
+}
+
+.source-modal {
+  width: min(520px, 100%);
+}
+
+.source-modal h2 {
+  margin: 5px 0 16px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.segmented {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  background: var(--soft);
+  border-radius: 10px;
+}
+
+.segmented button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.segmented button.is-active {
+  color: var(--text);
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(20, 20, 25, 0.05);
+}
+
+.field select {
+  width: 100%;
+  height: 36px;
+  padding: 0 9px;
+  color: var(--text);
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  outline: 0;
+  font-size: 12px;
+}
+
+.field select:focus {
+  border-color: #aeb3c0;
 }
 
 .spin {

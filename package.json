@@ -9,7 +9,8 @@
   "dependencies": {
     "mammoth": "1.13.0",
     "pdf-parse": "2.4.5",
-    "playwright": "1.62.1"
+    "playwright": "1.62.1",
+    "tesseract.js": "7.0.0"
   },
   "scripts": {
     "start": "node src/poc.cjs serve",

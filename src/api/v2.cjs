@@ -35,8 +35,8 @@ function mapMessage(row,fileRows=[]){
   return {
     id:row.id,
     platform:row.platform,
-    conversation:{type:row.conversation_type,id:row.conversation_id},
-    sender:{id:row.sender_id},
+    conversation:{type:row.conversation_type,id:row.conversation_id,name:row.conversation_name||null},
+    sender:{id:row.sender_id,name:row.sender_name||null},
     source_time:row.source_time,
     received_at:row.received_at,
     kind:row.kind,
@@ -53,8 +53,32 @@ function mapSource(row){
     total:row.total,
     unread:row.unread,
     last_at:row.last_at,
+    conversation_name:row.conversation_name||null,
     last_sender_id:row.last_sender_id,
+    last_sender_name:row.last_sender_name||null,
     last_text:row.last_text
+  };
+}
+function mapNotification(row){
+  return {
+    id:row.id,
+    kind:row.kind,
+    title:row.title,
+    body:row.body,
+    read:!!row.read_at,
+    created_at:row.created_at
+  };
+}
+function mapListenSource(row){
+  return {
+    id:row.id,
+    platform:row.platform,
+    account_ref:row.account_ref,
+    conversation_type:row.conversation_type,
+    conversation_id:row.conversation_id,
+    sender_id:row.sender_id||'',
+    display_name:row.display_name||null,
+    enabled:!!row.enabled
   };
 }
 function mapSuggestion(row,sourceRows=[]){
@@ -124,7 +148,7 @@ function mapPlan(row){
 }
 const knownErrors=new Set(['invalid_cursor','message_not_found','suggestion_not_found','suggestion_already_decided','invalid_body','body_too_large','invalid_json']);
 
-function createV2Handler({messages,suggestions,tasks,jobs,files,config}){
+function createV2Handler({messages,suggestions,tasks,jobs,files,sources,notifications,contacts,config}){
   return async function handle(req,res,pathname,searchParams){
     if(!authorized(req,config.token)){send(res,401,{error:'unauthorized'});return true;}
     const accountRef=config.account_id?String(config.account_id):'';
@@ -146,6 +170,101 @@ function createV2Handler({messages,suggestions,tasks,jobs,files,config}){
       if(req.method==='GET'&&pathname==='/v1/sources'){
         send(res,200,{items:messages.sources({accountRef}).map(mapSource)});
         return true;
+      }
+      if(pathname==='/v1/notifications'||pathname.startsWith('/v1/notifications/')){
+        if(!notifications)throw Error('notification_repository_unavailable');
+        if(req.method==='GET'&&pathname==='/v1/notifications'){
+          const items=notifications.list({
+            accountRef,
+            unreadOnly:searchParams.get('unread')==='1',
+            limit:searchParams.get('limit')||50
+          });
+          send(res,200,{items:items.map(mapNotification),unread:notifications.unreadCount({accountRef})});
+          return true;
+        }
+        const notificationMatch=pathname.match(/^\/v1\/notifications\/(\d+)\/read$/);
+        if(req.method==='POST'&&notificationMatch){
+          if(!notifications.markRead({id:Number(notificationMatch[1]),accountRef}))throw Error('notification_not_found');
+          send(res,200,{ok:true});
+          return true;
+        }
+        return false;
+      }
+      if(pathname==='/v1/listen-sources'||pathname.startsWith('/v1/listen-sources/')){
+        if(!sources)throw Error('source_repository_unavailable');
+        if(req.method==='GET'&&pathname==='/v1/listen-sources'){
+          send(res,200,{items:sources.list({accountRef}).map(mapListenSource)});
+          return true;
+        }
+        if(req.method==='POST'&&pathname==='/v1/listen-sources'){
+          const body=await readJson(req);
+          if(!['group','private'].includes(body.conversation_type))throw Error('source_type_invalid');
+          const added=sources.add({
+            accountRef,
+            conversationType:body.conversation_type,
+            conversationId:String(body.conversation_id||''),
+            senderId:body.sender_id?String(body.sender_id):'',
+            displayName:body.display_name||null
+          });
+          messages.backfillNames({accountRef});
+          send(res,200,{source:mapListenSource(added)});
+          return true;
+        }
+        const listenMatch=pathname.match(/^\/v1\/listen-sources\/(\d+)$/);
+        if(listenMatch){
+          const id=Number(listenMatch[1]);
+          if(req.method==='DELETE'){
+            if(!sources.remove({id,accountRef}))throw Error('source_not_found');
+            send(res,200,{ok:true});
+            return true;
+          }
+          if(req.method==='PATCH'){
+            const body=await readJson(req);
+            if(typeof body.enabled!=='boolean')throw Error('invalid_body');
+            if(!sources.setEnabled({id,accountRef,enabled:body.enabled}))throw Error('source_not_found');
+            send(res,200,{ok:true});
+            return true;
+          }
+        }
+        return false;
+      }
+      if(pathname.startsWith('/v1/contacts/')){
+        if(!contacts)throw Error('contact_service_unavailable');
+        if(req.method==='POST'&&pathname==='/v1/contacts/refresh'){
+          if(!sources)throw Error('source_repository_unavailable');
+          const [groups,friends]=await Promise.all([
+            contacts.getGroups({config}),
+            contacts.getFriends({config})
+          ]);
+          const groupNames=new Map(groups.map(item=>[String(item.id),item.name]));
+          const friendNames=new Map(friends.map(item=>[String(item.id),item.name]));
+          let updated=0;
+          for(const row of sources.list({accountRef})){
+            const name=row.conversation_type==='group'
+              ? groupNames.get(String(row.conversation_id))
+              : friendNames.get(String(row.conversation_id));
+            if(name&&name!==row.display_name){
+              if(sources.updateDisplayName({id:row.id,accountRef,displayName:name}))updated++;
+            }
+          }
+          messages.backfillNames({accountRef});
+          send(res,200,{updated});
+          return true;
+        }
+        if(req.method==='GET'&&pathname==='/v1/contacts/groups'){
+          send(res,200,{items:await contacts.getGroups({config})});
+          return true;
+        }
+        const memberMatch=pathname.match(/^\/v1\/contacts\/groups\/(\d+)\/members$/);
+        if(req.method==='GET'&&memberMatch){
+          send(res,200,{items:await contacts.getGroupMembers(memberMatch[1],{config})});
+          return true;
+        }
+        if(req.method==='GET'&&pathname==='/v1/contacts/friends'){
+          send(res,200,{items:await contacts.getFriends({config})});
+          return true;
+        }
+        return false;
       }
       const messageMatch=pathname.match(/^\/v1\/messages\/(\d+)$/);
       if(messageMatch){
@@ -284,15 +403,17 @@ function createV2Handler({messages,suggestions,tasks,jobs,files,config}){
       return false;
     }catch(error){
       const message=String(error.message||error).split('\n')[0];
-      if(message==='suggestion_not_found'||message==='message_not_found'||message==='task_not_found'||message==='plan_not_found'||message==='operation_not_found'){
+      if(message==='suggestion_not_found'||message==='message_not_found'||message==='task_not_found'||message==='plan_not_found'||message==='operation_not_found'||message==='source_not_found'||message==='notification_not_found'){
         send(res,404,{error:message});
       }else if(message==='task_account_mismatch'){
         send(res,403,{error:message});
       }else if(message==='suggestion_already_decided'||message.startsWith('invalid_transition_')||message==='plan_not_current'||message==='task_state_conflict'||message==='execute_disabled'){
         send(res,409,{error:message});
-      }else if(message==='task_repository_unavailable'||message==='job_repository_unavailable'){
+      }else if(message==='task_repository_unavailable'||message==='job_repository_unavailable'||message==='source_repository_unavailable'||message==='contact_service_unavailable'||message==='notification_repository_unavailable'){
         send(res,503,{error:message});
-      }else if(knownErrors.has(message)||message==='answers_required'||message==='invalid_answer'||message==='client_request_id_required'){
+      }else if(message.startsWith('onebot_')){
+        send(res,502,{error:message});
+      }else if(knownErrors.has(message)||message==='answers_required'||message==='invalid_answer'||message==='client_request_id_required'||message==='source_type_invalid'||message==='source_id_invalid'||message==='source_sender_invalid'){
         send(res,400,{error:message});
       }else{
         send(res,500,{error:'internal_error'});
