@@ -5,3 +5,15 @@ desktop/src-tauri/target/
 desktop/src-tauri/gen/
 *.tsbuildinfo
 *.log
+
+# Android 手机端工程（mobile/android）的本地与构建产物
+mobile/android/.gradle/
+mobile/android/.kotlin/
+mobile/android/.idea/
+mobile/android/**/build/
+mobile/android/local.properties
+mobile/android/**/*.iml
+mobile/android/**/captures/
+mobile/android/**/keystore.properties
+mobile/android/**/*.jks
+mobile/android/**/*.keystore
