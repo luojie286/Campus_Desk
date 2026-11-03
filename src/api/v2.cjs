@@ -164,12 +164,35 @@ function mapOperation(row){
 }
 const knownErrors=new Set(['invalid_cursor','message_not_found','suggestion_not_found','suggestion_already_decided','invalid_body','body_too_large','invalid_json']);
 
-function createV2Handler({messages,suggestions,tasks,jobs,files,sources,notifications,contacts,config}){
+function createV2Handler({messages,suggestions,tasks,jobs,files,sources,notifications,contacts,briefings,config}){
   return async function handle(req,res,pathname,searchParams){
     if(!authorized(req,config.token)){send(res,401,{error:'unauthorized'});return true;}
     const accountRef=config.account_id?String(config.account_id):'';
     if(!accountRef){send(res,500,{error:'account_not_configured'});return true;}
     try{
+      if(pathname==='/v1/briefing-settings'||pathname.startsWith('/v1/briefings')){
+        if(!briefings){send(res,503,{error:'briefing_unavailable'});return true;}
+        if(pathname==='/v1/briefing-settings'&&req.method==='GET'){
+          send(res,200,briefings.settings(accountRef));return true;
+        }
+        if(pathname==='/v1/briefing-settings'&&req.method==='PUT'){
+          let result;try{result=briefings.saveSettings(accountRef,await readJson(req));}
+          catch{send(res,400,{error:'invalid_briefing_settings'});return true;}
+          send(res,200,result);return true;
+        }
+        if(pathname==='/v1/briefings'&&req.method==='GET'){
+          send(res,200,{items:briefings.list(accountRef)});return true;
+        }
+        if(pathname==='/v1/briefings/today'&&req.method==='POST'){
+          const row=briefings.ensure(accountRef,new Date().toISOString(),true);
+          send(res,row.state==='ready'?200:202,briefings.get(accountRef,row.id));return true;
+        }
+        const match=pathname.match(/^\/v1\/briefings\/(\d+)$/);
+        if(match&&req.method==='GET'){
+          const item=briefings.get(accountRef,match[1]);send(res,item?200:404,item||{error:'briefing_not_found'});return true;
+        }
+        return false;
+      }
       if(req.method==='GET'&&pathname==='/v1/messages'){
         const result=messages.list({
           accountRef,

@@ -1,5 +1,9 @@
 # 校园个人助手
 
+技术早报：Android 0.2.0 已新增每日技术资讯与重大事件摘要，支持定时设置、来源链接和历史阅读。见 [功能设计](docs/morning-briefing.md) 与 [最新验证](docs/verification/2026-11-03-briefing.md)。默认不自动开启主机定时。
+
+2026-11-03：Android 原生审批客户端首版已实现，见 [整体实施计划](docs/android-implementation.md)、[手机端运行说明](mobile/android/README.md) 与 [自动验证记录](docs/verification/2026-11-03-android.md)。已生成 debug APK，默认离线演示；真机、锁屏通知和真实手机审批仍待验收。
+
 接手入口：[HANDOFF.md](HANDOFF.md)。可直接发送给 DeepSeek 的提示：[DEEPSEEK_PROMPT.md](DEEPSEEK_PROMPT.md)。
 
 当前阶段：消息中心、候选合并与文档审批后端 + Web/Tauri 桌面端。真实群消息、PDF 提取、文档审批写入和回读已在 2026-10-30 验证；多消息过滤/合并已完成本地测试，尚待真实群聊复测。

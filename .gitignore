@@ -6,10 +6,26 @@ desktop/src-tauri/gen/
 *.tsbuildinfo
 *.log
 
+# 本机代理工作树、凭证配置与交接生成物
+.claude/worktrees/
+.claude/settings.local.json
+.env
+.env.*
+!.env.example
+handoff/
+
+# 安装包和运行诊断不属于源码；Gradle wrapper jar 仍需提交
+*.apk
+*.aab
+*.apks
+*.hprof
+
 # Android 手机端工程（mobile/android）的本地与构建产物
 mobile/android/.gradle/
 mobile/android/.kotlin/
 mobile/android/.idea/
+mobile/android/**/.cxx/
+mobile/android/**/.externalNativeBuild/
 mobile/android/**/build/
 mobile/android/local.properties
 mobile/android/**/*.iml

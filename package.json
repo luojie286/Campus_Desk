@@ -7,6 +7,7 @@
     "node": ">=24"
   },
   "dependencies": {
+    "fast-xml-parser": "5.11.2",
     "mammoth": "1.13.0",
     "pdf-parse": "2.4.5",
     "playwright": "1.62.1",

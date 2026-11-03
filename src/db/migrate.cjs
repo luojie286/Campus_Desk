@@ -433,6 +433,26 @@ const MIGRATIONS=[
           ON notifications(account_ref,read_at,created_at DESC);
       `);
     }
+  },
+  {
+    version:8,
+    name:'morning_briefings',
+    up(db){
+      db.exec(`
+        CREATE TABLE briefing_settings(
+          account_ref TEXT PRIMARY KEY,enabled INTEGER NOT NULL DEFAULT 0,
+          time TEXT NOT NULL DEFAULT '08:00',time_zone TEXT NOT NULL DEFAULT 'Asia/Yakutsk'
+        );
+        CREATE TABLE briefings(
+          id INTEGER PRIMARY KEY,account_ref TEXT NOT NULL,local_date TEXT NOT NULL,
+          time_zone TEXT NOT NULL,state TEXT NOT NULL,requested INTEGER NOT NULL DEFAULT 0,
+          attempts INTEGER NOT NULL DEFAULT 0,lease_owner TEXT,lease_until TEXT,retry_at TEXT,
+          content_json TEXT,mode TEXT,error_class TEXT,created_at TEXT NOT NULL,generated_at TEXT,
+          UNIQUE(account_ref,local_date)
+        );
+        CREATE INDEX idx_briefings_account ON briefings(account_ref,local_date DESC);
+      `);
+    }
   }
 ];
 

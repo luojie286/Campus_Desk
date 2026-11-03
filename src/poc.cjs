@@ -29,6 +29,8 @@ const {downloadOneBotFile}=require('./files/onebot.cjs');
 const {extractFileText}=require('./files/extract.cjs');
 const {suggestFromConversation}=require('./suggest/conversation.cjs');
 const {createV2Handler}=require('./api/v2.cjs');
+const {createBriefingRepository}=require('./briefings/repository.cjs');
+const {processBriefing}=require('./briefings/worker.cjs');
 fs.mkdirSync('.private',{recursive:true});
 const configPath='.private/config.json';
 if(!fs.existsSync(configPath)){
@@ -47,9 +49,17 @@ const classificationsRepo=createClassificationRepository(store.db);
 const filesRepo=createFileRepository(store.db);
 const sourcesRepo=createSourceRepository(store.db);
 const notificationsRepo=createNotificationRepository(store.db);
-const v2Handler=createV2Handler({messages:messagesRepo,suggestions:suggestionsRepo,tasks:tasksRepo,jobs:jobsRepo,files:filesRepo,sources:sourcesRepo,notifications:notificationsRepo,contacts,config});
+const briefingsRepo=createBriefingRepository(store.db);
+const v2Handler=createV2Handler({messages:messagesRepo,suggestions:suggestionsRepo,tasks:tasksRepo,jobs:jobsRepo,files:filesRepo,sources:sourcesRepo,notifications:notificationsRepo,briefings:briefingsRepo,contacts,config});
 const command=process.argv[2]||'status';
 let busy=false;
+let briefingBusy=false;
+async function drainBriefing(){
+  if(briefingBusy)return;
+  briefingBusy=true;
+  try{await processBriefing({db:store.db,briefings:briefingsRepo,accountRef:String(config.account_id||''),config});}
+  finally{briefingBusy=false;}
+}
 // 收到链接后的自动准备：读表、定位身份、调用 DeepSeek、生成计划。
 // 该阶段只读，成功后进入 awaiting_approval，等待上层预览确认，不自动写入。
 async function prepareGeneralRun(run){
@@ -544,7 +554,7 @@ async function main(){
         res.setHeader('Access-Control-Allow-Origin',origin);
         res.setHeader('Vary','Origin');
         res.setHeader('Access-Control-Allow-Headers','Authorization, Content-Type');
-        res.setHeader('Access-Control-Allow-Methods','GET, POST, PATCH, OPTIONS');
+        res.setHeader('Access-Control-Allow-Methods','GET, POST, PUT, PATCH, OPTIONS');
       }
       if(req.method==='OPTIONS'){res.statusCode=204;res.end();return;}
       const respond=(status,data)=>{res.statusCode=status;res.end(JSON.stringify(data));};
@@ -560,7 +570,7 @@ async function main(){
       if(req.method==='GET'&&req.url==='/health')return respond(200,{running:true,sourceConfigured:!!config.source.id,busy});
       const requestUrl=new URL(req.url||'/','http://127.0.0.1');
       const pathname=requestUrl.pathname;
-      if(pathname.startsWith('/v1/messages')||pathname.startsWith('/v1/suggestions')||pathname.startsWith('/v1/todos')||pathname.startsWith('/v1/tasks')||pathname==='/v1/sources'||pathname.startsWith('/v1/listen-sources')||pathname.startsWith('/v1/notifications')||pathname.startsWith('/v1/contacts/')){
+      if(pathname.startsWith('/v1/brief')||pathname.startsWith('/v1/messages')||pathname.startsWith('/v1/suggestions')||pathname.startsWith('/v1/todos')||pathname.startsWith('/v1/tasks')||pathname==='/v1/sources'||pathname.startsWith('/v1/listen-sources')||pathname.startsWith('/v1/notifications')||pathname.startsWith('/v1/contacts/')){
         const handled=await v2Handler(req,res,pathname,requestUrl.searchParams);
         if(handled)return;
       }
@@ -611,6 +621,8 @@ async function main(){
     });
     server.listen(config.port,'127.0.0.1',()=>console.log('Listening on http://127.0.0.1:'+config.port+'; POST /onebot'));
     setInterval(()=>drain().catch(()=>{}),2000).unref();
+    drainBriefing().catch(()=>{});
+    setInterval(()=>drainBriefing().catch(()=>{}),30000).unref();
     if(config.messageCenter){
       setInterval(()=>drainClassifyJobs().catch(()=>{}),2000).unref();
       setInterval(()=>drainConversationJobs().catch(()=>{}),2000).unref();
