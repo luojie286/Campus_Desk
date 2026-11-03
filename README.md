@@ -1,6 +1,6 @@
 # 校园个人助手
 
-私网连接：Android 0.3.0 已实现 Tailscale HTTPS 网关与邀请配对、独立设备令牌及撤销；本机真实后台只读联调通过，139 项后端、47 项手机端测试通过。当前 Tailscale 账号尚未启用 Serve，手机无线仍待验证。见 [连接方案与步骤](docs/private-network.md) 和 [本轮验证](docs/verification/2026-11-03-private-network.md)。
+私网连接：Android 0.3.0 已实现 Tailscale HTTPS 网关与邀请配对、独立设备令牌及撤销；此前 139 项后端、47 项手机端测试通过。Serve 现已配置；新增独立 tsnet 实验包在 Android 16 真机通过私网只读 GET 200，用户确认 365VPN 同时保持连接、外网正常。未整合正式 App，且有一次重启读取失败待观察，锁屏与长期运行未验。见 [内嵌实验](docs/tsnet-probe.md) 和 [连接方案](docs/private-network.md)。
 
 技术早报：Android 0.2.0 已新增每日技术资讯与重大事件摘要，支持定时设置、来源链接和历史阅读。见 [功能设计](docs/morning-briefing.md) 与 [最新验证](docs/verification/2026-11-03-briefing.md)。默认不自动开启主机定时。
 

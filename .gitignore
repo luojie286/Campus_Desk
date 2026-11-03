@@ -33,3 +33,6 @@ mobile/android/**/captures/
 mobile/android/**/keystore.properties
 mobile/android/**/*.jks
 mobile/android/**/*.keystore
+
+# 内嵌 Tailscale 技术验证的本机构建库
+mobile/android/tsnetProbe/libs/
