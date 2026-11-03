@@ -354,6 +354,12 @@ function createV2Handler({messages,suggestions,tasks,jobs,files,sources,notifica
         send(res,200,{items});
         return true;
       }
+      const todoMatch=pathname.match(/^\/v1\/todos\/([1-9]\d*)\/(complete|reopen|delete)$/);
+      if(req.method==='POST'&&todoMatch){
+        await readJson(req);
+        const todo=suggestions.updateTodo({id:Number(todoMatch[1]),accountRef,action:todoMatch[2]});
+        send(res,200,{todo});return true;
+      }
       if(pathname==='/v1/tasks'||pathname.startsWith('/v1/tasks/')){
         if(!tasks)throw Error('task_repository_unavailable');
         if(req.method==='GET'&&pathname==='/v1/tasks'){
@@ -495,7 +501,7 @@ function createV2Handler({messages,suggestions,tasks,jobs,files,sources,notifica
       return false;
     }catch(error){
       const message=String(error.message||error).split('\n')[0];
-      if(message==='suggestion_not_found'||message==='message_not_found'||message==='task_not_found'||message==='plan_not_found'||message==='operation_not_found'||message==='source_not_found'||message==='notification_not_found'){
+      if(message==='todo_not_found'||message==='suggestion_not_found'||message==='message_not_found'||message==='task_not_found'||message==='plan_not_found'||message==='operation_not_found'||message==='source_not_found'||message==='notification_not_found'){
         send(res,404,{error:message});
       }else if(message==='task_account_mismatch'){
         send(res,403,{error:message});

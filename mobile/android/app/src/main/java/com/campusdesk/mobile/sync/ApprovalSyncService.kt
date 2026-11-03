@@ -23,6 +23,7 @@ class ApprovalSyncService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onCreate() {
         super.onCreate()
+        SyncRuntime.session = sessionId
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannels(listOf(
             NotificationChannel("sync", "后台同步状态", NotificationManager.IMPORTANCE_LOW),
@@ -40,10 +41,13 @@ class ApprovalSyncService : Service() {
             stopMessage = "系统暂不允许后台同步，请保持应用前台后重试"
             stopSelf(); return START_NOT_STICKY
         }
-        if (polling?.isActive == true) return START_NOT_STICKY
+        if (polling?.isActive == true) return START_STICKY
         polling = scope.launch {
             var failures = 0
             try {
+                // System sticky recovery is allowed only while the user still
+                // wants sync. Explicit stop and platform timeout never self-restart.
+                if (intent == null && !container.settings.read().syncEnabled) { stopSelf(); return@launch }
                 container.settings.beginSync(sessionId)
                 val connection = container.connection()
                 if (connection.demo || connection.token.isBlank() || !canNotify()) {
@@ -51,11 +55,14 @@ class ApprovalSyncService : Service() {
                     container.settings.syncSession(sessionId, false, stopMessage); stopSelf(); return@launch
                 }
                 val fingerprint = connection.fingerprint()
-                val gateway = container.gateway()
+                var gateway: com.campusdesk.mobile.data.Gateway? = null
                 while (isActive) {
                     if (container.connection().fingerprint() != fingerprint) break
                     try {
-                        val snapshot = gateway.snapshot()
+                        // Bootstrap can fail while the private network is cold.
+                        // Keep the service and retry just like an ordinary read.
+                        val active = gateway ?: container.gateway().also { gateway = it }
+                        val snapshot = active.snapshot()
                         val settings = container.settings.read()
                         val previous = container.settings.readSeen(fingerprint)
                         val batch = planNotifications(previous, snapshot, settings.notifyExisting)
@@ -80,7 +87,7 @@ class ApprovalSyncService : Service() {
             catch (_: Exception) { stopMessage = "同步无法启动，请检查加密设置" }
             finally { stopSelf() }
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
     private fun canNotify() = (Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) &&
         NotificationManagerCompat.from(this).areNotificationsEnabled()
@@ -109,6 +116,7 @@ class ApprovalSyncService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE); stopSelf()
     }
     override fun onDestroy() {
+        if (SyncRuntime.session == sessionId) SyncRuntime.session = null
         scope.cancel(); stopForeground(STOP_FOREGROUND_REMOVE)
         persistStopped(stopMessage)
         super.onDestroy()

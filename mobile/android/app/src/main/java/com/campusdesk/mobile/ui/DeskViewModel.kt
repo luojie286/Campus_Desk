@@ -39,9 +39,11 @@ class DeskViewModel(app: Application) : AndroidViewModel(app) {
     }
     private suspend fun initialize() {
         try {
+            val interrupted = container.settings.recoverStoppedSync(com.campusdesk.mobile.sync.SyncRuntime.running)
             val settings = container.settings.read()
             val stored = withContext(Dispatchers.IO) { container.vault.read().isNotBlank() }
-            mutable.update { it.copy(settings = settings, tokenStored = stored, ready = true) }
+            mutable.update { it.copy(settings = settings, tokenStored = stored, ready = true,
+                message = if (interrupted) "后台同步已中断，请到设置重新开启，并检查手机的后台运行限制" else it.message) }
             refreshNow()
         } catch (error: Exception) {
             mutable.update { it.copy(ready = true, tab = 3, message = "无法读取加密设置，请重新保存或清除令牌") }
@@ -122,6 +124,11 @@ class DeskViewModel(app: Application) : AndroidViewModel(app) {
     fun decide(id: Long, accept: Boolean) = action {
         container.gateway().decideSuggestion(id, accept)
         mutable.update { it.copy(suggestion = null, message = if (accept) "已保留为待办" else "已忽略") }
+        refreshNow()
+    }
+    fun updateTodo(todo: Todo, operation: String) = action {
+        container.gateway().updateTodo(todo.id, operation)
+        mutable.update { it.copy(message = when(operation) { "delete" -> "待办已删除"; "complete" -> "待办已完成"; else -> "已恢复为待办" }) }
         refreshNow()
     }
     fun answer(task: Task, answers: Map<String, String>) = action {

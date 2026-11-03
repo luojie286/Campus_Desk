@@ -129,13 +129,27 @@ function createSuggestionRepository(db){
     listTodos({accountRef,status=null,limit=100}){
       const safeLimit=Math.min(Math.max(Number(limit)||100,1),200);
       const params=[String(accountRef)];
-      let where='m.account_ref=?';
+      let where="m.account_ref=? AND t.status<>'deleted'";
       if(status){where+=' AND t.status=?';params.push(String(status));}
       return db.prepare(`SELECT DISTINCT t.* FROM todos t
         JOIN todo_messages tm ON tm.todo_id=t.id
         JOIN messages m ON m.id=tm.message_id
         WHERE ${where} ORDER BY t.created_at DESC,t.id DESC LIMIT ?`)
         .all(...params,safeLimit);
+    },
+    updateTodo({id,accountRef,action,now=new Date().toISOString()}){
+      if(!['complete','reopen','delete'].includes(action))throw Error('invalid_body');
+      const status={complete:'done',reopen:'open',delete:'deleted'}[action];
+      if(!status)throw Error('invalid_body');
+      // Soft deletion keeps original messages and document operations intact.
+      // Require ownership of every source message, not just one matching link.
+      const result=db.prepare(`UPDATE todos SET status=?,updated_at=? WHERE id=?
+        AND (status IN ('open','done') OR (status='deleted' AND ?='delete'))
+        AND EXISTS(SELECT 1 FROM todo_messages tm JOIN messages m ON m.id=tm.message_id WHERE tm.todo_id=todos.id AND m.account_ref=?)
+        AND NOT EXISTS(SELECT 1 FROM todo_messages tm JOIN messages m ON m.id=tm.message_id WHERE tm.todo_id=todos.id AND m.account_ref<>?)`)
+        .run(status,now,Number(id),action,String(accountRef),String(accountRef));
+      if(result.changes!==1)throw Error('todo_not_found');
+      return db.prepare('SELECT * FROM todos WHERE id=?').get(Number(id));
     }
   };
 }

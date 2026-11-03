@@ -13,6 +13,18 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class ApiClientTest {
+    @Test fun `todo mutations send explicit actions and never retry HTTP failures`() = runBlocking {
+        val client = client()
+        for (action in listOf("complete","reopen","delete")) {
+            respond("{}")
+            client.updateTodo(17,action)
+            val request = server.takeRequest()
+            assertEquals("POST",request.method); assertEquals("/v1/todos/17/$action",request.path)
+        }
+        respond("{}",409)
+        try { client.updateTodo(17,"delete"); fail() } catch (error: ApiException) { assertEquals(409,error.status) }
+        assertEquals(4,server.requestCount)
+    }
     private val server = MockWebServer().apply { start() }
     private val token = "test-only-token-not-a-real-secret"
     private fun client(value: String = token) = ApiClient(Connection(server.url("/").toString(), value))

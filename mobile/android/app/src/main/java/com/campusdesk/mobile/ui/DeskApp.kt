@@ -65,7 +65,7 @@ private val scheme = lightColorScheme(primary = green, secondary = Color(0xFF527
                     state.briefing != null -> BriefingDetails(state.briefing)
                     state.tab == 0 -> PullToRefreshBox(isRefreshing = state.loading, onRefresh = model::refresh) { Inbox(state, model) }
                     state.tab == 1 -> PullToRefreshBox(isRefreshing = state.loading, onRefresh = model::refresh) { BriefingsScreen(state, model) }
-                    state.tab == 2 -> PullToRefreshBox(isRefreshing = state.loading, onRefresh = model::refresh) { Todos(state.snapshot.todos) }
+                    state.tab == 2 -> PullToRefreshBox(isRefreshing = state.loading, onRefresh = model::refresh) { Todos(state.snapshot.todos, state.acting, model) }
                     else -> SettingsScreen(state, model, onStartSync)
                 }
             }
@@ -261,18 +261,27 @@ private fun identityLabel(mode: String?) = when (mode) {
     "new_row" -> "新增一行，请核对位置"; "reserved" -> "占位行"; else -> "身份模式待核对"
 }
 private fun fieldLabel(field: String) = mapOf("name" to "姓名", "student_id" to "学号", "major" to "专业", "sex" to "性别", "age" to "年龄", "phone" to "联系电话")[field] ?: field
-@Composable private fun Todos(todos: List<Todo>) {
+@Composable private fun Todos(todos: List<Todo>, busy: Boolean, model: DeskViewModel) {
+    var deleting by remember { mutableStateOf<Todo?>(null) }
     LazyColumn(contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Section("已保留的待办", "本版只读展示；候选需要你保留后才出现在这里") }
+        item { Section("已保留的待办", "可标记完成、恢复为待办或删除") }
         if (todos.isEmpty()) item { Empty("还没有正式待办") }
         items(todos, key = { it.id }) { todo -> OutlinedCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(todo.title, style = MaterialTheme.typography.titleMedium)
-                Text(if (todo.status == "open") "待完成" else todo.status, color = green)
+                Text(if (todo.status == "open") "待完成" else "已完成", color = green)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    TextButton(onClick = { model.updateTodo(todo, if (todo.status == "open") "complete" else "reopen") }, enabled = !busy) { Text(if (todo.status == "open") "标记完成" else "恢复待办") }
+                    TextButton(onClick = { deleting = todo }, enabled = !busy) { Text("删除") }
+                }
                 todo.dueAt?.let { Text("截止：$it", style = MaterialTheme.typography.bodySmall) }
             }
         } }
     }
+    deleting?.let { todo -> AlertDialog(onDismissRequest = { deleting = null }, title = { Text("删除这条待办？") },
+        text = { Text("“${todo.title}”将从待办列表移除。原消息和关联文档任务会保留，删除待办不会撤回文档操作。") },
+        confirmButton = { TextButton(onClick = { deleting = null; model.updateTodo(todo,"delete") }, enabled = !busy) { Text("确认删除") } },
+        dismissButton = { TextButton(onClick = { deleting = null }) { Text("取消") } }) }
 }
 @Composable private fun SettingsScreen(state: ScreenState, model: DeskViewModel, onStartSync: () -> Unit) {
     var base by rememberSaveable(state.settings.base) { mutableStateOf(state.settings.base) }

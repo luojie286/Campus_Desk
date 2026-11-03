@@ -19,6 +19,23 @@ import org.robolectric.annotation.GraphicsMode
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ScreenTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    @Test fun `todo buttons complete restore and require delete confirmation`() {
+        compose.waitUntil(15_000) { compose.onAllNodesWithText("文档计划").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithText("待办",useUnmergedTree=true).performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("标记完成").fetchSemanticsNodes().isNotEmpty() }
+        compose.onAllNodesWithText("标记完成")[0].performScrollTo().performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("恢复待办").fetchSemanticsNodes().isNotEmpty() }
+        compose.onAllNodesWithText("恢复待办")[0].performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("恢复待办").fetchSemanticsNodes().isEmpty() }
+        val before = compose.onAllNodesWithText("删除").fetchSemanticsNodes().size
+        compose.onAllNodesWithText("删除")[0].performClick()
+        compose.onNodeWithText("删除这条待办？").assertIsDisplayed()
+        compose.onNodeWithText("取消").performClick()
+        assert(compose.onAllNodesWithText("删除").fetchSemanticsNodes().size == before)
+        compose.onAllNodesWithText("删除")[0].performClick()
+        compose.onNodeWithText("确认删除").performClick()
+        compose.waitUntil(5_000) { compose.onAllNodesWithText("删除").fetchSemanticsNodes().size == before-1 }
+    }
     @Test fun `demo opens candidate and retaining it creates a visible todo`() {
         compose.waitUntil(15_000) { compose.onAllNodesWithText("周五前提交实验报告").fetchSemanticsNodes().isNotEmpty() }
         screenshot("inbox")

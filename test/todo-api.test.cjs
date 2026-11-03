@@ -1,0 +1,36 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const http=require('node:http');
+const {openStore}=require('../src/core.cjs');
+const {applyMigrations}=require('../src/db/migrate.cjs');
+const {createSuggestionRepository}=require('../src/db/repositories/suggestions.cjs');
+const {createMessageRepository}=require('../src/db/repositories/messages.cjs');
+const {createV2Handler}=require('../src/api/v2.cjs');
+const {scopeFor}=require('../src/network/gateway.cjs');
+
+test('todos: complete reopen delete are account isolated and keep source history',async t=>{
+ const store=openStore(':memory:');applyMigrations(store.db);t.after(()=>store.db.close());
+ const messages=createMessageRepository(store.db),suggestions=createSuggestionRepository(store.db);
+ const message=messages.insert({platform:'qq',adapterInstance:'test',accountRef:'7007',conversationType:'private',conversationId:'1001',senderId:'1001',sourceMessageId:'todo-test',kind:'text',contentText:'合成待办',receivedAt:new Date().toISOString()});
+ const id=suggestions.insert({messageId:message.id,title:'合成待办',kind:'todo'});
+ const todo=suggestions.accept({id,accountRef:'7007'}).todo;
+ const config={token:'test-only-owner-token',account_id:'7007'};
+ const handle=createV2Handler({messages,suggestions,config});
+ const server=http.createServer(async(req,res)=>{const u=new URL(req.url,'http://localhost');if(!await handle(req,res,u.pathname,u.searchParams)){res.statusCode=404;res.end('{}');}});
+ await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+ t.after(()=>new Promise(resolve=>{server.close(resolve);server.closeAllConnections();}));
+ const call=async(action,token=config.token)=>{const r=await fetch(`http://127.0.0.1:${server.address().port}/v1/todos/${todo.id}/${action}`,{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:'{}'});return {status:r.status,body:await r.json()};};
+ assert.equal((await call('complete','wrong')).status,401);
+ config.account_id='other';assert.equal((await call('delete')).status,404);
+ config.account_id='7007';assert.equal((await call('complete')).body.todo.status,'done');
+ assert.equal((await call('complete')).body.todo.status,'done');
+ assert.equal((await call('reopen')).body.todo.status,'open');
+ assert.equal((await call('delete')).body.todo.status,'deleted');
+ assert.equal((await call('delete')).status,200);
+ assert.equal((await call('reopen')).status,404);
+ assert.equal(suggestions.listTodos({accountRef:'7007'}).length,0);
+ assert.ok(messages.get({id:message.id,accountRef:'7007'}));
+ assert.equal(store.db.prepare('SELECT COUNT(*) n FROM todo_messages WHERE todo_id=?').get(todo.id).n,1);
+ for(const action of ['complete','reopen','delete'])assert.equal(scopeFor('POST',`/v1/todos/${todo.id}/${action}`),'mobile:act');
+ assert.equal(scopeFor('GET',`/v1/todos/${todo.id}/delete`),null);
+});

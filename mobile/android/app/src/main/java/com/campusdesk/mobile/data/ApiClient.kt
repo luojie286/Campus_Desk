@@ -65,6 +65,10 @@ class ApiClient(connection: Connection, private val client: OkHttpClient = OkHtt
         return Snapshot(suggestions, tasks, todos, briefings, supported)
     }
     override suspend fun task(id: Long): Task = apiJson.decodeFromString(request("/v1/tasks/$id"))
+    override suspend fun updateTodo(id: Long, action: String) {
+        require(action in setOf("complete","reopen","delete")) { "待办操作无效" }
+        request("/v1/todos/$id/$action", buildJsonObject {})
+    }
     override suspend fun decideSuggestion(id: Long, accept: Boolean) { request("/v1/suggestions/$id/${if (accept) "accept" else "dismiss"}", buildJsonObject {}) }
     override suspend fun answer(id: Long, answers: Map<String, String>) {
         request("/v1/tasks/$id/answers", buildJsonObject {

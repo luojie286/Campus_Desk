@@ -15,6 +15,7 @@ function scopeFor(method,path){
   if(method==='GET'&&(/^\/v1\/(suggestions|tasks|todos|briefings|briefing-settings)$/.test(path)||/^\/v1\/(tasks|briefings)\/[1-9]\d*$/.test(path)))return 'mobile:read';
   if(method==='PUT'&&path==='/v1/briefing-settings')return 'mobile:act';
   if(method==='POST'&&(/^\/v1\/suggestions\/[1-9]\d*\/(accept|dismiss)$/.test(path)||
+    /^\/v1\/todos\/[1-9]\d*\/(complete|reopen|delete)$/.test(path)||
     /^\/v1\/tasks\/[1-9]\d*\/(answers|approvals|cancel)$/.test(path)||path==='/v1/briefings/today'))return 'mobile:act';
   return null;
 }

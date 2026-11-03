@@ -7,6 +7,8 @@ import com.campusdesk.mobile.data.SettingsStore
 import com.campusdesk.mobile.domain.SeenState
 import com.campusdesk.mobile.sync.ApprovalSyncService
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -19,6 +21,30 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class AndroidStorageTest {
+    @Test fun `sticky system recovery stops when user no longer enabled sync`() = runBlocking {
+        val store = SettingsStore(RuntimeEnvironment.getApplication()); store.save(Settings(demo=false))
+        val controller = Robolectric.buildService(ApprovalSyncService::class.java).create()
+        try {
+            val service = controller.get()
+            assertTrue(com.campusdesk.mobile.sync.SyncRuntime.running)
+            assertEquals(android.app.Service.START_STICKY,service.onStartCommand(null,0,1))
+            withTimeout(3000) { while (!shadowOf(service).isStoppedBySelf) delay(10) }
+        } finally { controller.destroy() }
+        assertFalse(com.campusdesk.mobile.sync.SyncRuntime.running)
+    }
+    @Test fun `dead service cannot leave persisted connected state and keeps notification history`() = runBlocking {
+        val store = SettingsStore(RuntimeEnvironment.getApplication())
+        val seen = SeenState(true,setOf(7),setOf(9))
+        store.beginSync("old-process"); store.sync(true,"连接正常")
+        store.saveSeen("device",seen)
+        assertTrue(store.recoverStoppedSync(false))
+        assertFalse(store.read().syncEnabled)
+        assertTrue(store.read().syncStatus.contains("中断"))
+        assertEquals(seen,store.readSeen("device"))
+        store.beginSync("live-process")
+        assertFalse(store.recoverStoppedSync(true)); assertTrue(store.read().syncEnabled)
+        store.clear()
+    }
     @Test fun `settings persist seen IDs and isolate connection baselines`() = runBlocking {
         val store = SettingsStore(RuntimeEnvironment.getApplication())
         store.save(Settings(demo = false))

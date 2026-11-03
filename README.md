@@ -1,5 +1,7 @@
 # 校园个人助手
 
+Android 0.5.0：修复后台进程被清理后的假在线状态与启动失败不重试问题，增加待办完成、恢复和确认删除。后端 140 项、Android 53 项测试通过；真机后台通知已确认可见，长期限制与恢复范围见 [通知和待办验收](docs/notification-and-todos.md)。
+
 私网连接：正式 Android 0.4.0 已内置 Tailscale 用户态传输，手机无需另开系统 VPN；设备邀请配对、令牌撤销、现有审批和同步共用该通道。48 项手机端、4 项 Go 测试及 debug/release 构建/lint 通过，新手机正式 App 的真实配对、列表读取与跨进程复用通过，原 VPN 网络保持；同步、锁屏与长期运行按实际验收记录。见 [正式接入](docs/embedded-tailscale.md)、[内嵌实验](docs/tsnet-probe.md) 和 [主机连接方案](docs/private-network.md)。
 
 技术早报：Android 0.2.0 已新增每日技术资讯与重大事件摘要，支持定时设置、来源链接和历史阅读。见 [功能设计](docs/morning-briefing.md) 与 [最新验证](docs/verification/2026-11-03-briefing.md)。默认不自动开启主机定时。

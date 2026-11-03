@@ -48,6 +48,7 @@ data class Connection(val base: String = "http://127.0.0.1:9087", val token: Str
 }
 
 interface Gateway {
+    suspend fun updateTodo(id: Long, action: String)
     suspend fun health()
     suspend fun snapshot(): Snapshot
     suspend fun task(id: Long): Task

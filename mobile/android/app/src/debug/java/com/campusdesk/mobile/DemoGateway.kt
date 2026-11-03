@@ -25,6 +25,16 @@ class DemoGateway : Gateway {
     override suspend fun health() {}
     override suspend fun snapshot() = Snapshot(suggestions.toList(), tasks.toList(), todos.toList(), briefings.toList())
     override suspend fun task(id: Long) = tasks.first { it.id == id }
+    override suspend fun updateTodo(id: Long, action: String) {
+        val index = todos.indexOfFirst { it.id == id }
+        require(index >= 0)
+        when(action) {
+            "delete" -> todos.removeAt(index)
+            "complete" -> todos[index] = todos[index].copy(status="done")
+            "reopen" -> todos[index] = todos[index].copy(status="open")
+            else -> error("Invalid todo action")
+        }
+    }
     override suspend fun decideSuggestion(id: Long, accept: Boolean) {
         val s = suggestions.first { it.id == id }
         suggestions.remove(s)

@@ -70,6 +70,13 @@ class SettingsStore(private val context: Context) {
     suspend fun sync(enabledValue: Boolean, message: String, timestamp: String? = null) {
         context.deskData.edit { it[enabled] = enabledValue; it[status] = message; if (!enabledValue) it.remove(session); if (timestamp != null) it[synced] = timestamp }
     }
+    suspend fun recoverStoppedSync(serviceRunning: Boolean): Boolean {
+        if (!serviceRunning && read().syncEnabled) {
+            sync(false,"后台同步已中断，请重新开启并允许后台运行")
+            return true
+        }
+        return false
+    }
     suspend fun beginSync(id: String) {
         context.deskData.edit { it[session] = id; it[enabled] = true; it[status] = "正在连接" }
     }

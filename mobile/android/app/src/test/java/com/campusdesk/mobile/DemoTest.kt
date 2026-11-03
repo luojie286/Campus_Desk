@@ -4,6 +4,12 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DemoTest {
+    @Test fun `demo todo can be completed restored and deleted`() = runBlocking {
+        val gateway = DemoGateway(); val todo = gateway.snapshot().todos.first()
+        gateway.updateTodo(todo.id,"complete"); assertEquals("done",gateway.snapshot().todos.first().status)
+        gateway.updateTodo(todo.id,"reopen"); assertEquals("open",gateway.snapshot().todos.first().status)
+        gateway.updateTodo(todo.id,"delete"); assertTrue(gateway.snapshot().todos.none { it.id == todo.id })
+    }
     @Test fun `demo decisions change only the demo instance`() = runBlocking {
         val gateway = DemoGateway()
         val before = gateway.snapshot()
