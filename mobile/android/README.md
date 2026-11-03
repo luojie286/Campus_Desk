@@ -1,5 +1,7 @@
 # 课桌 Android
 
+0.3.0 新增私网邀请配对，独立设备令牌存入 Keystore；47 项手机端测试、debug/release 构建和 lint 通过。Tailscale Serve 尚需在账号页面启用，无线真机未验。完整连接步骤见 [私网方案](../../docs/private-network.md)，本轮结果见 [验证记录](../../docs/verification/2026-11-03-private-network.md)。
+
 USB 真机已验证：Android 13 上认证读取、Keystore 跨进程保存、通知及空闲后重连通过；修复 GET 自动重连后，本机测试为 43 项。见 [真机记录](../../docs/verification/2026-11-03-usb.md)。实际批准写表与长期锁屏仍待验收。
 
 0.2.0 新增“早报”页：公开技术资讯与重大事件的 AI 中文摘要、原文链接、来源覆盖、今日生成及每日时间/时区设置。最新手机端 41 项测试，见 [早报验证](../../docs/verification/2026-11-03-briefing.md)。早报生成在电脑端运行，默认关闭定时，需要连接更新后的后台后在“早报 → 定时设置”开启。
@@ -31,29 +33,29 @@ App 不持有 QQ 登录，不在手机直接写腾讯文档；批准后由电脑
 
 产物：`app/build/outputs/apk/debug/app-debug.apk`。这是调试签名的测试包；不应作为正式分发包。编译 SDK/目标 SDK 36，最低 Android 8.0（API 26）。
 
-## USB 连接（之后有设备时）
+## USB 连接
 
 电脑运行后端、手机开启 USB 调试并连接后，在电脑执行：
 
 ```powershell
 adb reverse tcp:9087 tcp:9087
-adb install -r mobile/android/app/build/outputs/apk/debug/app-debug.apk
+adb install --no-streaming -r mobile/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-第一条将手机 9087 转发到电脑后端；第二条安装或更新 App，`-r` 保留现有应用数据。手机设置中关闭演示、保留默认地址 `http://127.0.0.1:9087`，填写本机后端访问令牌并保存，再测试连接。令牌不能通过聊天、公开日志或提交分发。
+第一条将手机 9087 转发到电脑后端；第二条先传输 APK 再安装，规避本次 OPPO 设备的流式安装等待问题，`-r` 保留现有应用数据。手机设置中关闭演示、保留默认地址 `http://127.0.0.1:9087`，填写本机后端访问令牌并保存，再测试连接。令牌不能通过聊天、公开日志或提交分发。
 
-目前后端只监听电脑回环地址。USB 断开后，默认地址无法访问电脑；本版没有远程访问、设备配对或独立设备令牌。release 禁止明文 HTTP，当前 USB 路线使用 debug 包。
+后端只监听电脑回环地址。USB 断开后默认地址无法访问电脑；0.3.0 无线连接使用 Tailscale、HTTPS 网关和独立设备令牌，需完成页首方案的配置。release 禁止明文 HTTP，USB 路线使用 debug 包。
 
 ## 验证层级
 
 - 纯 Kotlin / MockWebServer：接口解析、身份计划规则、请求摘要、401/409、重定向、网络结果、通知去重与退避。
 - 合约：真实 `createV2Handler` + SQLite 内存库 + Android HTTP 客户端；所有数据合成，无 worker 和真实写表。
 - Robolectric：本机 Android 模拟运行库中的 Compose 页面交互；不等于模拟器或真机。
-- 真机待验：Keystore 重启持久化、权限弹窗、USB 连接、通知点击、锁屏、国产 ROM 后台策略及真实审批。
+- USB 真机已有证据：见页首记录；无线、通知点击、长期锁屏、国产 ROM 后台策略及真实审批仍待验。
 
 列表受现有后端限制：最多 100 条当前候选、200 条最近任务。首次同步默认不提醒旧数据，可在设置调整。正在待审批的计划版本变化只更新界面，不重复提醒。应用进程被杀后不会自行重启同步。
 
-Android 15+ 的 dataSync 前台服务存在时长限制，本版收到超时会停服务，不能保证全天实时通知。后续远程访问和可靠推送需另行设计。
+Android 15+ 的 dataSync 前台服务存在时长限制，本版收到超时会停服务，不能保证全天实时通知。私网连接不会取消系统后台限制，可靠推送仍需后续设计。
 
 ## 目录
 

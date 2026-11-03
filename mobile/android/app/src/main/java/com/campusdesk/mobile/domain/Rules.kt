@@ -37,7 +37,7 @@ fun errorText(error: Throwable): String = when (error) {
         else -> "服务暂时无法处理请求（${error.status}），请稍后刷新"
     }
     is IllegalArgumentException -> error.message ?: "请检查输入"
-    else -> "连接中断或响应异常，请检查主机和 USB 连接；操作结果请刷新后核对"
+    else -> "连接中断或响应异常，请检查主机和 Tailscale / USB 连接；操作结果请刷新后核对"
 }
 fun cellAddress(col: Int, row: Int): String {
     var n = col; var label = ""

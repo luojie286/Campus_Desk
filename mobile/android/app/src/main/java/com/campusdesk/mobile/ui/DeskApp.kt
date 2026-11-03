@@ -281,8 +281,21 @@ private fun fieldLabel(field: String) = mapOf("name" to "姓名", "student_id" t
     var demo by rememberSaveable(state.settings.demo) { mutableStateOf(state.settings.demo) }
     var notify by rememberSaveable(state.settings.notifyExisting) { mutableStateOf(state.settings.notifyExisting) }
     var clearing by remember { mutableStateOf(false) }
+    var invitation by remember { mutableStateOf("") }
+    var deviceName by rememberSaveable { mutableStateOf("我的安卓手机") }
+    var pairing by rememberSaveable { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Section("连接到你的电脑", "电脑负责接收与执行，手机负责核对与审批")
+        OutlinedButton(onClick = { pairing = !pairing }, modifier = Modifier.fillMaxWidth()) { Text("使用私网邀请配对") }
+        if (pairing) {
+            Text("手机先登录并启用 Tailscale，再粘贴主机生成的邀请文件内容。邀请 5 分钟内有效。", style = MaterialTheme.typography.bodySmall)
+            OutlinedTextField(deviceName, { deviceName = it.take(80) }, label = { Text("设备名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(invitation, { invitation = it.take(4097) }, label = { Text("配对邀请 JSON") },
+                visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+            Button(onClick = { model.pair(invitation, deviceName); invitation = ""; token = "" },
+                enabled = !state.acting && invitation.isNotBlank(), modifier = Modifier.fillMaxWidth()) { Text("配对并加密保存") }
+            Text("邀请只使用一次。若兑换中断，请在主机撤销未使用设备，再生成新邀请。", style = MaterialTheme.typography.bodySmall)
+        }
         OutlinedTextField(base, { base = it }, label = { Text("服务地址") }, singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), modifier = Modifier.fillMaxWidth())
         OutlinedTextField(token, { token = it }, label = { Text(if (state.tokenStored) "已加密保存；留空保留原令牌" else "访问令牌") },
@@ -297,7 +310,7 @@ private fun fieldLabel(field: String) = mapOf("name" to "姓名", "student_id" t
         OutlinedButton(onClick = model::stopSync, modifier = Modifier.fillMaxWidth()) { Text("停止后台同步") }
         Text("需要允许通知。同步每 25 秒查询，网络失败会退避；系统可能限制后台运行时长。关闭通知或认证失效会停止同步。", style = MaterialTheme.typography.bodySmall)
         Section("USB 开发连接")
-        Text("手机连接电脑并启用 USB 调试后，电脑需执行 adb reverse tcp:9087 tcp:9087。未转发时，手机的 127.0.0.1 不会指向电脑。离开 USB 后本版不能远程连接。", style = MaterialTheme.typography.bodySmall)
+        Text("手机连接电脑并启用 USB 调试后，电脑需执行 adb reverse tcp:9087 tcp:9087。未转发时，手机的 127.0.0.1 不会指向电脑。无线连接请使用上方私网配对；主机需开机联网。", style = MaterialTheme.typography.bodySmall)
         Text("本版最多显示后端当前返回的 100 条候选、200 条任务；通知以成功同步为准，不保证全天实时推送。", style = MaterialTheme.typography.bodySmall)
         TextButton(onClick = { clearing = true }, enabled = !state.acting) { Text("清除令牌与本地同步记录") }
         Spacer(Modifier.height(20.dp))

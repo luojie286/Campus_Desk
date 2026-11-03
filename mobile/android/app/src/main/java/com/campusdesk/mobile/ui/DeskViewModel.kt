@@ -133,6 +133,15 @@ class DeskViewModel(app: Application) : AndroidViewModel(app) {
         val normalized = connectionBase(base)
         require(token.isBlank() || token.trim().length >= 32) { "访问令牌长度不足，请复制完整令牌" }
         require(demo || token.isNotBlank() || mutable.value.tokenStored) { "请填写访问令牌，或先启用演示模式" }
+        persistConnection(normalized, token, demo, notifyExisting)
+    }
+    fun pair(invitation: String, name: String) = action {
+        val invite = parsePairingInvitation(invitation)
+        val result = ApiClient(Connection(invite.base)).pair(invite.code, name.trim())
+        persistConnection(invite.base, result.token, false, mutable.value.settings.notifyExisting)
+        mutable.update { it.copy(message = "私网配对已保存，请测试连接后开启后台同步") }
+    }
+    private suspend fun persistConnection(normalized: String, token: String, demo: Boolean, notifyExisting: Boolean) {
         stopSyncNow()
         androidx.core.app.NotificationManagerCompat.from(getApplication()).cancelAll()
         generation++

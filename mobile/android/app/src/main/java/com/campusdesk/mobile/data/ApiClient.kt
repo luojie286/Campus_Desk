@@ -47,6 +47,14 @@ class ApiClient(connection: Connection, private val client: OkHttpClient = OkHtt
         if (health["running"]?.jsonPrimitive?.booleanOrNull != true) throw ApiException(503)
         request("/v1/tasks?limit=1") // 额外验证令牌，不能把 health 成功当成认证成功。
     }
+    suspend fun pair(code: String, name: String): PairingResult {
+        require(Regex("^[A-Za-z0-9_-]{43}$").matches(code) && name.isNotBlank() && name.length <= 80) { "请检查配对邀请与设备名称" }
+        // 兑换是一次性操作，使用不自动重发的修改请求客户端。这里不发送现有主令牌。
+        val result = apiJson.decodeFromString<PairingResult>(request("/v1/device-pairings",
+            buildJsonObject { put("code", code); put("name", name) }, authenticated = false))
+        require(Regex("^[A-Za-z0-9_-]{43}$").matches(result.token) && result.deviceId.isNotBlank()) { "配对响应无效，请在主机重新生成邀请" }
+        return result
+    }
     override suspend fun snapshot(): Snapshot {
         val suggestions = apiJson.decodeFromString<Items<Suggestion>>(request("/v1/suggestions?status=pending&limit=100")).items
         val tasks = apiJson.decodeFromString<Items<Task>>(request("/v1/tasks?limit=200")).items

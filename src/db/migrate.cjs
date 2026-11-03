@@ -453,6 +453,20 @@ const MIGRATIONS=[
         CREATE INDEX idx_briefings_account ON briefings(account_ref,local_date DESC);
       `);
     }
+  },
+  {
+    version:9,
+    name:'private_mobile_devices',
+    up(db){
+      // 旧版预留设备默认没有账号与有效期，因此不能意外获得新网关访问权。
+      db.exec(`
+        ALTER TABLE devices ADD COLUMN account_ref TEXT;
+        ALTER TABLE devices ADD COLUMN expires_at TEXT;
+        ALTER TABLE pairing_codes ADD COLUMN account_ref TEXT;
+        ALTER TABLE pairing_codes ADD COLUMN scopes TEXT;
+        CREATE UNIQUE INDEX idx_devices_token_hash ON devices(token_hash);
+      `);
+    }
   }
 ];
 

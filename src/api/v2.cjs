@@ -169,6 +169,10 @@ function createV2Handler({messages,suggestions,tasks,jobs,files,sources,notifica
     if(!authorized(req,config.token)){send(res,401,{error:'unauthorized'});return true;}
     const accountRef=config.account_id?String(config.account_id):'';
     if(!accountRef){send(res,500,{error:'account_not_configured'});return true;}
+    // 手机网关带上它认证的账号；后台仍在运行旧配置时拒绝跨账号转发。
+    if(req.headers['x-campus-account']&&req.headers['x-campus-account']!==accountRef){
+      send(res,409,{error:'gateway_account_mismatch'});return true;
+    }
     try{
       if(pathname==='/v1/briefing-settings'||pathname.startsWith('/v1/briefings')){
         if(!briefings){send(res,503,{error:'briefing_unavailable'});return true;}

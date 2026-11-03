@@ -1,8 +1,10 @@
 # 校园个人助手
 
+私网连接：Android 0.3.0 已实现 Tailscale HTTPS 网关与邀请配对、独立设备令牌及撤销；本机真实后台只读联调通过，139 项后端、47 项手机端测试通过。当前 Tailscale 账号尚未启用 Serve，手机无线仍待验证。见 [连接方案与步骤](docs/private-network.md) 和 [本轮验证](docs/verification/2026-11-03-private-network.md)。
+
 技术早报：Android 0.2.0 已新增每日技术资讯与重大事件摘要，支持定时设置、来源链接和历史阅读。见 [功能设计](docs/morning-briefing.md) 与 [最新验证](docs/verification/2026-11-03-briefing.md)。默认不自动开启主机定时。
 
-2026-11-03：Android 原生审批客户端首版已实现，见 [整体实施计划](docs/android-implementation.md)、[手机端运行说明](mobile/android/README.md) 与 [自动验证记录](docs/verification/2026-11-03-android.md)。已生成 debug APK，默认离线演示；真机、锁屏通知和真实手机审批仍待验收。
+2026-11-03：Android 原生审批客户端已实现，见 [整体实施计划](docs/android-implementation.md) 与 [手机端运行说明](mobile/android/README.md)。USB 真机认证读取、Keystore 跨进程读取与通知可见已验证；长期锁屏与真实手机审批仍待验收。
 
 接手入口：[HANDOFF.md](HANDOFF.md)。可直接发送给 DeepSeek 的提示：[DEEPSEEK_PROMPT.md](DEEPSEEK_PROMPT.md)。
 
@@ -51,4 +53,4 @@ npm run desktop:build     # 桌面构建
 
 2026-10-30 已完成真实群消息验收：指定 QQ 群消息经 NapCat HTTP 进入后台；真实 PDF 完成下载、文字提取和待办候选；真实腾讯文档完成“任务 → 计划 → 审批 → 写入 → 回读”，包括仅学号匹配和新增行两种身份模式。验证记录只保留任务号、状态和脱敏后的字段数量，不记录真实姓名、学号或文档内容。
 
-真实消息验证通过后，配置已切到 `v2`，避免同一文档链接同时产生旧 run 和新任务。Tauri 2 Windows 壳已生成并通过启动检查，令牌改存 Windows Credential Manager；Android 原生端仍待完成。
+真实消息验证通过后，配置已切到 `v2`，避免同一文档链接同时产生旧 run 和新任务。Tauri 2 Windows 壳已生成并通过启动检查，令牌改存 Windows Credential Manager；Android 当前进度见页首和手机端运行说明。
