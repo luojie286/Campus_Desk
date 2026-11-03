@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -57,11 +56,13 @@ func registerInterfaces(source InterfaceSource) {
 }
 
 type Client struct {
-	server   *tsnet.Server
-	observer Observer
-	mu       sync.Mutex
-	cancel   context.CancelFunc
-	dir      string
+	server        *tsnet.Server
+	observer      Observer
+	mu            sync.Mutex
+	cancel        context.CancelFunc
+	dir           string
+	proxy         *tunnelProxy
+	proxyPassword string
 }
 
 func emit(observer Observer, values map[string]any) {
@@ -69,13 +70,16 @@ func emit(observer Observer, values map[string]any) {
 	observer.Event(string(data))
 }
 func NewClient(dir string, source InterfaceSource, observer Observer) *Client {
+	return NewClientNamed(dir, "campusdesk-android-probe", source, observer)
+}
+func NewClientNamed(dir, hostname string, source InterfaceSource, observer Observer) *Client {
 	envknob.SetNoLogsNoSupport()
 	// Android apps have neither a shell HOME nor a writable working directory.
 	// Even with uploads disabled, tsnet's backend needs an explicit state path.
 	envknob.Setenv("TS_LOGS_DIR", dir)
 	registerInterfaces(source)
 	authPattern := regexp.MustCompile(`https://login\.tailscale\.com/[^\s]+`)
-	server := &tsnet.Server{Dir: dir, Hostname: "campusdesk-android-probe", Logf: func(string, ...any) {}}
+	server := &tsnet.Server{Dir: dir, Hostname: hostname, Logf: func(string, ...any) {}}
 	// Only the login URL is shown to the owner, not general logs, account names,
 	// peer addresses or authentication tokens. No auth key is embedded in APK.
 	server.UserLogf = func(format string, args ...any) {
@@ -99,7 +103,6 @@ func (c *Client) Start() {
 			if value := recover(); value != nil {
 				// Experimental crash diagnostic stays inside the app sandbox. Never
 				// include the request token or HTTP body; this runs during node startup.
-				_ = os.WriteFile(filepath.Join(c.dir, "startup-panic.txt"), []byte(fmt.Sprintf("%v\n%s", value, debug.Stack())), 0600)
 				emit(c.observer, map[string]any{"stage": "startup_panicked"})
 			}
 		}()
@@ -146,6 +149,9 @@ func (c *Client) Close() {
 	defer c.mu.Unlock()
 	if c.cancel != nil {
 		c.cancel()
+	}
+	if c.proxy != nil {
+		c.proxy.close()
 	}
 	_ = c.server.Close()
 }

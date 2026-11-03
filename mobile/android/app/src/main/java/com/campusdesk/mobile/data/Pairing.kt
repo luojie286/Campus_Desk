@@ -30,6 +30,6 @@ fun parsePairingInvitation(raw: String, now: Instant = Instant.now()): PairingIn
         require(Instant.parse(value["expires_at"]!!.jsonPrimitive.content).isAfter(now))
         return PairingInvitation(base, code)
     } catch (_: Exception) {
-        throw IllegalArgumentException("配对邀请无效或已过期，请在主机重新生成；手机需启用 Tailscale")
+        throw IllegalArgumentException("配对邀请无效或已过期，请在主机重新生成；手机需连接内嵌私网")
     }
 }

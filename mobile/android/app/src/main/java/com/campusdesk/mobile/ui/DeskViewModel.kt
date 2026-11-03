@@ -16,6 +16,7 @@ import kotlinx.coroutines.sync.Mutex
 import java.util.UUID
 
 data class ScreenState(val snapshot: Snapshot = Snapshot(), val settings: Settings = Settings(),
+    val privateNetwork: TailnetState = TailnetState(),
     val tokenStored: Boolean = false, val loading: Boolean = false, val acting: Boolean = false,
     val message: String? = null, val task: Task? = null, val suggestion: Suggestion? = null,
     val briefing: Briefing? = null, val briefingSettings: BriefingSettings? = null,
@@ -27,7 +28,15 @@ class DeskViewModel(app: Application) : AndroidViewModel(app) {
     val state = mutable.asStateFlow()
     private val refreshLock = Mutex()
     private var generation = 0
-    init { viewModelScope.launch { initialize() } }
+    init {
+        viewModelScope.launch { initialize() }
+        viewModelScope.launch { container.privateNetwork.state.collect { value -> mutable.update { it.copy(privateNetwork = value) } } }
+    }
+    fun startPrivateNetwork() = action { withContext(Dispatchers.IO) { container.privateNetwork.start() } }
+    fun stopPrivateNetwork() = action {
+        stopSyncNow()
+        withContext(Dispatchers.IO) { container.privateNetwork.stop() }
+    }
     private suspend fun initialize() {
         try {
             val settings = container.settings.read()
@@ -137,7 +146,7 @@ class DeskViewModel(app: Application) : AndroidViewModel(app) {
     }
     fun pair(invitation: String, name: String) = action {
         val invite = parsePairingInvitation(invitation)
-        val result = ApiClient(Connection(invite.base)).pair(invite.code, name.trim())
+        val result = container.apiClient(Connection(invite.base)).pair(invite.code, name.trim())
         persistConnection(invite.base, result.token, false, mutable.value.settings.notifyExisting)
         mutable.update { it.copy(message = "私网配对已保存，请测试连接后开启后台同步") }
     }
@@ -149,7 +158,7 @@ class DeskViewModel(app: Application) : AndroidViewModel(app) {
         val settings = Settings(normalized, demo, notifyExisting)
         container.settings.save(settings)
         val stored = withContext(Dispatchers.IO) { container.vault.read().isNotBlank() }
-        mutable.update { ScreenState(settings = settings, tokenStored = stored, ready = true, acting = true, tab = 3, message = "设置已保存") }
+        mutable.update { ScreenState(settings = settings, privateNetwork = container.privateNetwork.state.value, tokenStored = stored, ready = true, acting = true, tab = 3, message = "设置已保存") }
         refreshNow()
     }
     fun clear() = action {
@@ -157,7 +166,7 @@ class DeskViewModel(app: Application) : AndroidViewModel(app) {
         androidx.core.app.NotificationManagerCompat.from(getApplication()).cancelAll()
         withContext(Dispatchers.IO) { container.vault.clear() }
         container.settings.clear()
-        mutable.update { ScreenState(settings = Settings(demo = false), ready = true, tab = 3, acting = true, message = "令牌和本地同步记录已清除") }
+        mutable.update { ScreenState(settings = Settings(demo = false), privateNetwork = container.privateNetwork.state.value, ready = true, tab = 3, acting = true, message = "令牌和本地同步记录已清除") }
         container.settings.save(Settings(demo = false))
     }
     fun stopSync() {

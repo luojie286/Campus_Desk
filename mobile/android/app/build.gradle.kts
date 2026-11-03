@@ -11,8 +11,8 @@ android {
         applicationId = "com.campusdesk.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     buildFeatures { compose = true; buildConfig = true }
@@ -27,6 +27,7 @@ android {
 }
 kotlin { compilerOptions { jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17 } }
 dependencies {
+    implementation(files("../tsnetProbe/libs/probe.aar"))
     // 较新的缓存依赖要求 SDK 37；本机 SDK 36 使用这一组已验证版本。
     implementation(platform("androidx.compose:compose-bom:2026.01.00"))
     implementation("androidx.core:core-ktx:1.17.0")

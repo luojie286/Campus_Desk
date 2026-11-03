@@ -12,6 +12,16 @@ if (-not (Test-Path -LiteralPath (Join-Path $AndroidSdk 'platforms\android-36'))
 $env:JAVA_HOME = $JavaHome
 $env:ANDROID_HOME = $AndroidSdk
 $env:GRADLE_USER_HOME = $GradleCache
+$taskBridge = Join-Path $taskAndroid 'tsnetProbe\libs\probe.aar'
+$taskBridgeSources = @(Get-ChildItem -LiteralPath (Join-Path $taskRoot 'mobile\tsnet-probe\go') -File | Where-Object { $_.Extension -eq '.go' -or $_.Name -in @('go.mod','go.sum') })
+$taskRebuildBridge = -not (Test-Path -LiteralPath $taskBridge)
+if (-not $taskRebuildBridge) {
+    $taskBridgeTime = (Get-Item -LiteralPath $taskBridge).LastWriteTimeUtc
+    $taskRebuildBridge = @($taskBridgeSources | Where-Object { $_.LastWriteTimeUtc -gt $taskBridgeTime }).Count -gt 0
+}
+if ($taskRebuildBridge) {
+    & (Join-Path $PSScriptRoot 'build-tsnet-probe.ps1') -JavaHome $JavaHome -AndroidSdk $AndroidSdk -GradleCache $GradleCache
+}
 # local.properties 只描述本机 SDK，不保存凭证，且已被 Git 忽略。
 $taskSdkProperty = $AndroidSdk.Replace('\', '/').Replace(':', '\:')
 Set-Content -LiteralPath (Join-Path $taskAndroid 'local.properties') -Value "sdk.dir=$taskSdkProperty" -Encoding utf8

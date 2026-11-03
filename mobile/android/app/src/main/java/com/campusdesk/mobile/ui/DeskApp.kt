@@ -284,11 +284,23 @@ private fun fieldLabel(field: String) = mapOf("name" to "姓名", "student_id" t
     var invitation by remember { mutableStateOf("") }
     var deviceName by rememberSaveable { mutableStateOf("我的安卓手机") }
     var pairing by rememberSaveable { mutableStateOf(false) }
+    val uriHandler = LocalUriHandler.current
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         Section("连接到你的电脑", "电脑负责接收与执行，手机负责核对与审批")
+        Section("内嵌私网", when (state.privateNetwork.phase) {
+            "starting" -> "正在连接私网"
+            "login_required" -> "需要授权此手机的课桌节点"
+            "online" -> "私网已连接"
+            "start_failed", "startup_panicked" -> "连接失败，请停止后重试"
+            else -> "尚未启动"
+        })
+        Text("可以保持原来的 VPN 连接，无需启动手机 Tailscale。首次使用需授权课桌节点，再完成设备邀请配对。", style = MaterialTheme.typography.bodySmall)
+        OutlinedButton(onClick = model::startPrivateNetwork, enabled = !state.acting, modifier = Modifier.fillMaxWidth()) { Text("连接内嵌私网") }
+        if (state.privateNetwork.authUrl.isNotBlank()) Button(onClick = { uriHandler.openUri(state.privateNetwork.authUrl) }, modifier = Modifier.fillMaxWidth()) { Text("授权课桌节点") }
+        TextButton(onClick = model::stopPrivateNetwork, enabled = !state.acting) { Text("停止私网与同步") }
         OutlinedButton(onClick = { pairing = !pairing }, modifier = Modifier.fillMaxWidth()) { Text("使用私网邀请配对") }
         if (pairing) {
-            Text("手机先登录并启用 Tailscale，再粘贴主机生成的邀请文件内容。邀请 5 分钟内有效。", style = MaterialTheme.typography.bodySmall)
+            Text("先连接上方内嵌私网并完成节点授权，再粘贴主机生成的邀请文件内容。邀请 5 分钟内有效。", style = MaterialTheme.typography.bodySmall)
             OutlinedTextField(deviceName, { deviceName = it.take(80) }, label = { Text("设备名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(invitation, { invitation = it.take(4097) }, label = { Text("配对邀请 JSON") },
                 visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())

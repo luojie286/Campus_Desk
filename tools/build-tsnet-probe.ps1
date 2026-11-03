@@ -19,6 +19,8 @@ $taskMobileVersion = 'v0.0.0-20261011034528-197770444867'
 New-Item -ItemType Directory -Path $taskTools, (Split-Path $taskAar -Parent) -Force | Out-Null
 Push-Location $taskGo
 try {
+    & go test .
+    if ($LASTEXITCODE -ne 0) { throw 'Go transport checks failed' }
     & go install "golang.org/x/mobile/cmd/gomobile@$taskMobileVersion"
     if ($LASTEXITCODE -ne 0) { throw 'gomobile installation failed' }
     & gomobile init

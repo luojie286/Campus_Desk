@@ -1,5 +1,7 @@
 # 课桌 Android
 
+0.4.0 正式接入内嵌 Tailscale，手机不需开启官方 Tailscale App 的 VPN，可保留 365VPN。设置页先“连接内嵌私网 → 授权课桌节点”，再邀请配对。48 项本机测试、4 项 Go 测试及 debug/release 构建/lint 通过，正式 App 真实配对、私网读取和进程重启复用已通过；短时同步和长期后台分别记录，见 [正式接入](../../docs/embedded-tailscale.md)。当前原生库只构建 arm64，签名仍为内部测试用途。
+
 0.3.0 新增私网邀请配对，独立设备令牌存入 Keystore；47 项手机端测试、debug/release 构建和 lint 通过。Tailscale Serve 尚需在账号页面启用，无线真机未验。完整连接步骤见 [私网方案](../../docs/private-network.md)，本轮结果见 [验证记录](../../docs/verification/2026-11-03-private-network.md)。
 
 USB 真机已验证：Android 13 上认证读取、Keystore 跨进程保存、通知及空闲后重连通过；修复 GET 自动重连后，本机测试为 43 项。见 [真机记录](../../docs/verification/2026-11-03-usb.md)。实际批准写表与长期锁屏仍待验收。
@@ -29,7 +31,7 @@ App 不持有 QQ 登录，不在手机直接写腾讯文档；批准后由电脑
 
 脚本依次执行 Android JVM/Robolectric 测试、lint 和 debug APK 构建，并输出 APK 路径及 SHA256。首次运行会下载依赖与 Robolectric Android 运行库；依赖齐全后可加 `-Offline`。测试会用 Node 启动临时内存后端，需 Node 24+ 在 PATH。
 
-可用 `-JavaHome`、`-AndroidSdk`、`-GradleCache` 指定工具目录。脚本仅生成被忽略的构建产物与本机 SDK 路径，不读取本项目 `.private/`，不启动真实账号或表格写入。
+可用 `-JavaHome`、`-AndroidSdk`、`-GradleCache` 指定工具目录。脚本生成被忽略的构建产物与本机 SDK 路径，原生桥接工具放 `.private/go-tools/`；不读取业务配置、账号凭证或启动真实表格写入。桥接库缺失/过期时自动重建，首次需下载锁定的 Go 模块和 Go Mobile 依赖。
 
 产物：`app/build/outputs/apk/debug/app-debug.apk`。这是调试签名的测试包；不应作为正式分发包。编译 SDK/目标 SDK 36，最低 Android 8.0（API 26）。
 
