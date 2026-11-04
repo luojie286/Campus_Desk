@@ -1,6 +1,6 @@
 # README 配图与截图来源
 
-- `hero.svg`：本项目原创 SVG 横幅，仅作为处理流程示意，不是界面截图。
+- `hero.svg`、`hero-en.svg`：本项目原创中英文 SVG 横幅，仅作为处理流程示意，不是界面截图。
 - `desktop-inbox.png`、`desktop-approval.png`：实际 React 前端在 Edge 无头浏览器中的截图。Playwright 拦截全部 API，注入合成消息与计划；屏蔽远程资源，禁止修改请求，没有业务后台和真实写表。
 - `android-*.png`：实际 Android Compose 界面，由 Robolectric 原生图形模式渲染。使用 debug 离线演示数据，不是手机实拍或模拟器截图。
 
