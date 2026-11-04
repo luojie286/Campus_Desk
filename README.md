@@ -1,39 +1,100 @@
-# 课桌 · 校园个人助手
+<p align="center">
+  <img src="docs/images/readme/hero.svg" alt="课桌 · 由你确认，再行动。QQ 通知整理、手机核对、主机执行与回读。" width="100%">
+</p>
 
-把指定 QQ 来源中的通知整理成待办，并在用户审批后，由电脑后台填写腾讯在线表格。Android 客户端负责查看、补充资料和审批，电脑负责消息处理与文档执行。
+<p align="center">
+  <strong>校园里的通知、待办与表格，在一个工作流里处理。</strong><br>
+  电脑整理消息、准备资料，手机核对计划；每一次填写，都由你批准。
+</p>
 
-当前是面向单用户、单主机的开发原型，主要在 Windows 上验证。Android 版本为 **0.5.0**；金山文档仍处于技术可行性分析阶段，尚未实现读写。
+<p align="center">
+  <a href="#界面预览">界面预览</a> ·
+  <a href="#核心能力">核心能力</a> ·
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#验证与限制">验证与限制</a> ·
+  <a href="#目录与文档">文档</a>
+</p>
 
-## 功能与范围
+**课桌（Campus Desk）** 是面向个人的校园助手：从指定 QQ 群或好友的消息中整理待办，为腾讯在线表格准备填写计划，并通过 Android 或桌面端核对、补充和审批。
 
-| 模块 | 当前能力 |
+当前为 **单用户、单主机的开发原型**，主要在 Windows 上验证。Android 已实现至 **0.5.0**；金山文档处于可行性分析阶段。
+
+## 界面预览
+
+### 电脑整理消息，手机决定行动
+
+实际桌面前端中的消息中心：原始通知、附件、合并候选和文档审批入口集中展示。
+
+<img src="docs/images/readme/desktop-inbox.png" alt="桌面消息中心：课程通知、合并待办候选、信息登记表审批入口和已提取文字的 PDF 附件。全部为合成演示数据。" width="100%">
+
+### 从待处理，到逐项核对，再到自己的待办
+
+<table>
+  <tr>
+    <th width="33%">待处理</th>
+    <th width="33%">填写计划审批</th>
+    <th width="33%">我的待办</th>
+  </tr>
+  <tr>
+    <td><img src="docs/images/readme/android-inbox.png" alt="Android 待处理：待办候选与文档计划" width="100%"></td>
+    <td><img src="docs/images/readme/android-plan.png" alt="Android 审批：展示目标行、原值、拟填值与批准按钮" width="100%"></td>
+    <td><img src="docs/images/readme/android-todos.png" alt="Android 待办：保留的事项、完成与删除操作" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center">合并相关通知，保留值得做的事</td>
+    <td align="center">先看清改哪里、填什么，再批准</td>
+    <td align="center">完成、恢复、二次确认删除</td>
+  </tr>
+</table>
+
+<details>
+<summary><strong>查看桌面审批界面与手机技术早报</strong></summary>
+
+<br>
+<img src="docs/images/readme/desktop-approval.png" alt="桌面审批详情：计划版本、身份定位方式、单元格原值与拟填值" width="100%">
+
+<p align="center">
+  <img src="docs/images/readme/android-briefing.png" alt="Android 技术早报详情，展示合成资讯与来源说明" width="300">
+</p>
+
+</details>
+
+<sub>截图均使用合成数据。桌面图来自实际 React 界面；Android 图来自实际 Compose 界面的 Robolectric 渲染，不是真机截图。图片不作为真实平台写入或后台通知的验收证据。[配图来源与复现](docs/images/readme/README.md)</sub>
+
+## 核心能力
+
+| 消息整理 | 个人待办 | 审批填写 |
+| --- | --- | --- |
+| 指定 QQ 群、成员或好友，按稳定账号标识过滤 | 合并同一事务的多条通知，保留或忽略候选 | 读取腾讯表格，定位本人行，准备单元格修改计划 |
+| PDF / DOCX 文字提取，图片本地 OCR | 手机完成、恢复、确认删除 | 缺资料先询问，展示原值和拟填值，再人工批准 |
+| 保留原始消息与来源，方便回看 | 技术早报、来源链接与定时设置 | 电脑写前复核、写后回读，结果未知时不自动重写 |
+
+| 客户端与组件 | 技术与职责 |
 | --- | --- |
-| QQ 消息 | 通过 NapCat / OneBot 接收指定群聊、群成员或好友消息，按稳定账号标识过滤、入库和去重 |
-| 待办 | 会话内合并相关消息，生成候选；手机保留/忽略候选，完成、恢复或确认删除正式待办 |
-| 附件 | PDF、DOCX 提取文字；图片使用本地 Tesseract OCR；旧式 `.doc` 等不支持格式明确反馈 |
-| 腾讯表格 | 读取表格、定位本人行、生成修改计划、补充缺失资料、人工审批、写前复核和写后回读 |
-| Android | Kotlin / Compose 原生客户端，Keystore 保存设备令牌，内嵌 Tailscale 私网传输 |
-| 桌面 | React / TypeScript 工作台与 Tauri 2 Windows 壳，原生壳使用 Windows Credential Manager |
-| 技术早报 | RSS 抓取、DeepSeek 中文摘要、来源链接、手机阅读和可配置定时 |
+| Android | Kotlin / Jetpack Compose，Keystore 加密设备令牌，查看、补充、审批 |
+| 桌面 | React / TypeScript / Vite，Tauri 2 Windows 壳使用 Credential Manager |
+| 主机 | Node.js 24+ / SQLite / Playwright，消息处理、计划、执行与核对 |
+| 私网 | Tailscale Serve HTTPS + Android 用户态 tsnet，独立业务设备配对 |
+| 模型与附件 | DeepSeek 负责分析与摘要；PDF / DOCX 提取，Tesseract 本地图片 OCR |
 
-待办的“保留”和“完成”不会自动批准文档填写。文档执行需要用户核对计划并批准；写入开始后结果不明时进入 `outcome_unknown`，只能先核对，不自动重写。
+手机不直接操作 QQ 或文档浏览器。主机服务与网关只监听回环地址，手机通过私网访问；Android 内嵌传输不占系统 `VpnService`，已在一台保留原 VPN 的手机上验证连接。
 
-## 处理流程
+## 工作流程
 
 ```mermaid
 flowchart LR
-    Q[QQ / OneBot] --> H[主机服务与 SQLite]
-    H --> T[待办候选与待办]
+    Q[QQ 指定来源] --> H[主机入库与分析]
+    H --> T[合并待办候选]
+    T --> K[手机保留 / 忽略]
     H --> P[只读准备填写计划]
     P --> A[手机或桌面核对审批]
-    A --> W[主机执行与回读]
-    H --> G[私网手机网关]
-    G <--> M[Android 客户端]
+    A --> W[主机写前复核与填写]
+    W --> V[回读确认 / 结果未知]
 ```
 
-主机服务与网关只监听本机回环地址，手机经 Tailscale Serve HTTPS 访问网关。Android 的用户态私网传输不占用系统 `VpnService`；已在一台保留原 VPN 的手机上验证连接，但不据此承诺所有设备和网络环境均兼容。
+保留待办不等于批准填写。写入开始后结果不明时进入 `outcome_unknown`，先核对，不自动重写。
 
-## 本地开发
+## 快速开始
 
 ### 环境要求
 
@@ -89,7 +150,7 @@ npm run desktop:dev
 
 完整步骤见 [Android 运行说明](mobile/android/README.md)。当前原生库构建目标为 arm64，debug APK 仅供测试，release 尚未配置正式发布签名。
 
-## 验证结果与已知限制
+## 验证与限制
 
 以下是 **2026-11-03 的历史验证记录**，不代表当前机器上的服务或手机仍在线：
 
