@@ -128,7 +128,7 @@ npm run desktop:build
 
 主机配置位于 `.private/config.json`，资料与任务位于 `.private/poc.sqlite`。先确认来源、账号、`pipeline=v2`、`messageCenter=true`，在接入与登录检查期间保持 `execute=false`。DeepSeek 相关功能读取主机进程环境变量 `DEEPSEEK_API_KEY`；仅创建 `.env` 文件不会自动加载它。
 
-源代码仍保留一个开发时的测试表默认地址；新环境应换成自己获授权的测试表，不能把默认地址当作通用演示资源。
+首次配置不预置任何真实表格地址，需在本机配置中指定自己获授权的测试表。
 
 ```powershell
 npm start

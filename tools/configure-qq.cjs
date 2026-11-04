@@ -41,6 +41,8 @@ async function main(){
     return;
   }
   if(process.argv[2]==='resolve'){
+    const sourceName=process.argv[3]||app.source_name;
+    if(!sourceName)throw Error('source_name_required');
     const selfResult=await (await fetch('http://127.0.0.1:9088/get_login_info',{method:'POST',headers:{Authorization:'Bearer '+app.token,'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(10000)})).json();
     if(selfResult.status!=='ok')throw Error('qq_account_not_ready');
     const account=String(selfResult.data.user_id);
@@ -48,7 +50,6 @@ async function main(){
     const response=await fetch('http://127.0.0.1:9088/get_friend_list',{method:'POST',headers:{Authorization:'Bearer '+app.token,'Content-Type':'application/json'},body:'{}',signal:AbortSignal.timeout(10000)});
     if(!response.ok)throw Error('QQ API unavailable: '+response.status);
     const result=await response.json();if(result.status!=='ok'||!Array.isArray(result.data))throw Error('friend_list_unavailable');
-    const sourceName=process.argv[3]||app.source_name||'example-contact';
     const matches=result.data.filter(f=>f.nickname===sourceName||f.remark===sourceName);
     if(matches.length!==1)throw Error('friend_match_count_'+matches.length);
     app.account_id=account;

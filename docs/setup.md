@@ -16,7 +16,7 @@ node src/poc.cjs status
 
 - `token`：主机访问令牌，首次初始化自动生成。
 - `account_id` 与 `source`：当前 QQ 账号及指定来源的稳定标识。
-- `allowed_document`：本人获授权的测试表地址，替换开发默认值。
+- `allowed_document`：本人获授权的测试表地址，首次初始化时为空。
 - `pipeline` 设为 `v2`、`messageCenter` 设为 `true`。
 - 接入和登录检查期间保持 `execute=false`。
 

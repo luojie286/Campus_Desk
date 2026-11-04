@@ -34,7 +34,7 @@ const {processBriefing}=require('./briefings/worker.cjs');
 fs.mkdirSync('.private',{recursive:true});
 const configPath='.private/config.json';
 if(!fs.existsSync(configPath)){
-  fs.writeFileSync(configPath,JSON.stringify({port:9087,token:crypto.randomBytes(32).toString('hex'),source:{type:'private',id:''},allowed_document:'https://docs.qq.com/sheet/EXAMPLE_DOCUMENT_2',max_rows:6,execute:false},null,2));
+  fs.writeFileSync(configPath,JSON.stringify({port:9087,token:crypto.randomBytes(32).toString('hex'),source:{type:'private',id:''},allowed_document:'',max_rows:6,execute:false},null,2));
 }
 // 允许首次运行的空来源配置；非法端口、令牌或来源类型会拒绝启动。
 const config=loadConfig(configPath,{allowUnconfigured:true});

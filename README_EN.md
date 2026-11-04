@@ -128,7 +128,7 @@ First configure your accounts, profile, and dedicated sessions. See the [runtime
 
 Host configuration lives in `.private/config.json`; profiles and tasks live in `.private/poc.sqlite`. Check the source and account, use `pipeline=v2` and `messageCenter=true`, and keep `execute=false` during connection and login checks. DeepSeek features read `DEEPSEEK_API_KEY` from the host process environment; creating an `.env` file alone does not load it automatically.
 
-The source still contains a default spreadsheet URL from development. Replace it with your own authorized test spreadsheet; the bundled address is not a general-purpose demo resource.
+First-run configuration does not include a real spreadsheet address. Set your own authorized test spreadsheet in the local configuration.
 
 ```powershell
 npm start
