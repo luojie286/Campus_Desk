@@ -1,68 +1,47 @@
 # 课桌 Android
 
-0.5.0 已增加待办完成、恢复和确认删除，修复进程被结束后仍显示旧“连接正常”的状态。后台运行权限已在本次真机开启，合成候选的后台通知实际可见；140 项后端、53 项手机端测试通过。同步显示“同步中”表示持续检查已开启，可以直接退到桌面，不用等待结束。见 [通知与待办修复](../../docs/notification-and-todos.md)。
+Kotlin + Jetpack Compose 原生客户端，用于查看 QQ 消息整理出的候选、管理待办、补充资料和审批表格填写计划。当前版本为 0.5.0。
 
-0.4.0 正式接入内嵌 Tailscale，手机不需开启官方 Tailscale App 的 VPN，可保留 365VPN。设置页先“连接内嵌私网 → 授权课桌节点”，再邀请配对。48 项本机测试、4 项 Go 测试及 debug/release 构建/lint 通过，正式 App 真实配对、私网读取和进程重启复用已通过；短时同步和长期后台分别记录，见 [正式接入](../../docs/embedded-tailscale.md)。当前原生库只构建 arm64，签名仍为内部测试用途。
+## 功能
 
-0.3.0 新增私网邀请配对，独立设备令牌存入 Keystore；47 项手机端测试、debug/release 构建和 lint 通过。Tailscale Serve 尚需在账号页面启用，无线真机未验。完整连接步骤见 [私网方案](../../docs/private-network.md)，本轮结果见 [验证记录](../../docs/verification/2026-11-03-private-network.md)。
+- 候选保留/忽略；正式待办完成、恢复和二次确认删除。
+- 展示计划中的原值、拟填值、身份定位、警告和缺失字段；批准填写需要再次确认。
+- 技术早报阅读、来源链接和主机定时设置。
+- Keystore 加密业务令牌，内嵌用户态 Tailscale 私网连接。
+- 用户开启的后台同步与通知，失败退避和通知去重；不保证全天持续运行。
 
-USB 真机已验证：Android 13 上认证读取、Keystore 跨进程保存、通知及空闲后重连通过；修复 GET 自动重连后，本机测试为 43 项。见 [真机记录](../../docs/verification/2026-11-03-usb.md)。实际批准写表与长期锁屏仍待验收。
+手机不直接操作 QQ 或在线表格，获批计划由电脑后台执行。debug 包含离线演示，使用合成数据；release 不包含演示数据。
 
-0.2.0 新增“早报”页：公开技术资讯与重大事件的 AI 中文摘要、原文链接、来源覆盖、今日生成及每日时间/时区设置。最新手机端 41 项测试，见 [早报验证](../../docs/verification/2026-11-03-briefing.md)。早报生成在电脑端运行，默认关闭定时，需要连接更新后的后台后在“早报 → 定时设置”开启。
+## 构建
 
-原生 Kotlin + Jetpack Compose 客户端。整体计划见 [实施文档](../../docs/android-implementation.md)。
-
-## 已实现功能
-
-- 待处理：候选来源与摘要、保留/忽略、文档待审批和待补资料任务。
-- 任务详情：单元格原值/拟填值、计划版本、身份定位方式、警告、问答、批准二次确认、取消与状态轮询。
-- 待办：正式待办只读列表。
-- 设置：主机地址、Keystore 加密访问令牌、健康及认证检查、清除本机连接。
-- 用户启动的后台同步与通知：默认 25 秒，失败退避、通知去重、详情跳转、权限撤销/认证失败停止、系统超时退出。
-- debug 默认进入离线演示，示例数据只在内存中。release 源集不包含演示数据。
-
-App 不持有 QQ 登录，不在手机直接写腾讯文档；批准后由电脑执行。系统通知使用通用文案，不显示字段值。聊天、计划和资料只在界面/内存中使用，不做请求日志。
-
-## 本机构建
-
-在项目根目录运行：
+在仓库根目录运行：
 
 ```powershell
-.\tools\build-android.ps1
+.	oolsuild-android.ps1
 ```
 
-脚本依次执行 Android JVM/Robolectric 测试、lint 和 debug APK 构建，并输出 APK 路径及 SHA256。首次运行会下载依赖与 Robolectric Android 运行库；依赖齐全后可加 `-Offline`。测试会用 Node 启动临时内存后端，需 Node 24+ 在 PATH。
+脚本运行手机端测试、lint 和 debug APK 构建。需要 Node.js 24+、JDK 21、Android SDK 36，以及 Go/NDK 桥接库构建环境。用 `-JavaHome`、`-AndroidSdk`、`-GradleCache` 调整本机路径；依赖齐全后可以加 `-Offline`，但 Gradle 离线模式不代表 Go 模块已缓存。
 
-可用 `-JavaHome`、`-AndroidSdk`、`-GradleCache` 指定工具目录。脚本生成被忽略的构建产物与本机 SDK 路径，原生桥接工具放 `.private/go-tools/`；不读取业务配置、账号凭证或启动真实表格写入。桥接库缺失/过期时自动重建，首次需下载锁定的 Go 模块和 Go Mobile 依赖。
+产物位于 `app/build/outputs/apk/debug/app-debug.apk`，是调试签名测试包。最低 Android 8.0（API 26）；当前原生库目标为 arm64，release 尚未配置正式发布签名。
 
-产物：`app/build/outputs/apk/debug/app-debug.apk`。这是调试签名的测试包；不应作为正式分发包。编译 SDK/目标 SDK 36，最低 Android 8.0（API 26）。
-
-## USB 连接
-
-电脑运行后端、手机开启 USB 调试并连接后，在电脑执行：
+## 安装与连接
 
 ```powershell
-adb reverse tcp:9087 tcp:9087
 adb install --no-streaming -r mobile/android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-第一条将手机 9087 转发到电脑后端；第二条先传输 APK 再安装，规避本次 OPPO 设备的流式安装等待问题，`-r` 保留现有应用数据。手机设置中关闭演示、保留默认地址 `http://127.0.0.1:9087`，填写本机后端访问令牌并保存，再测试连接。令牌不能通过聊天、公开日志或提交分发。
+从仓库根目录执行，将 APK 安装到已授权设备；`-r` 保留现有应用数据，不要为了重连清空正常配对。
 
-后端只监听电脑回环地址。USB 断开后默认地址无法访问电脑；0.3.0 无线连接使用 Tailscale、HTTPS 网关和独立设备令牌，需完成页首方案的配置。release 禁止明文 HTTP，USB 路线使用 debug 包。
+私网使用时，先在主机配置 Tailscale 与手机网关；手机连接内嵌私网并完成节点授权，再通过主机的一次性邀请配对。两种授权分别完成后可复用，不需反复配对。
 
-## 验证层级
+完整步骤见 [运行与连接说明](../../docs/setup.md)。USB 开发调试可在主机执行 `adb reverse tcp:9087 tcp:9087`，把手机回环端口转发到主机；此路线使用允许明文 HTTP 的 debug 包。
 
-- 纯 Kotlin / MockWebServer：接口解析、身份计划规则、请求摘要、401/409、重定向、网络结果、通知去重与退避。
-- 合约：真实 `createV2Handler` + SQLite 内存库 + Android HTTP 客户端；所有数据合成，无 worker 和真实写表。
-- Robolectric：本机 Android 模拟运行库中的 Compose 页面交互；不等于模拟器或真机。
-- USB 真机已有证据：见页首记录；无线、通知点击、长期锁屏、国产 ROM 后台策略及真实审批仍待验。
+## 同步与隐私
 
-列表受现有后端限制：最多 100 条当前候选、200 条最近任务。首次同步默认不提醒旧数据，可在设置调整。正在待审批的计划版本变化只更新界面，不重复提醒。系统允许时可以恢复仍被用户启用的同步；用户停止、权限失败或系统超时后不自行恢复，厂商强杀仍不能保证恢复。
+后台同步由用户在前台开启，默认轮询并在失败时退避。首次同步默认不补发旧候选与审批通知，通知点击只进入详情，不直接批准。
 
-Android 15+ 的 dataSync 前台服务存在时长限制，本版收到超时会停服务，不能保证全天实时通知。私网连接不会取消系统后台限制，可靠推送仍需后续设计。
+Android 系统时长限制、省电与厂商进程回收可能停止同步。内嵌私网不能取消系统后台限制，不能将短时通知成功视为全天可靠。
 
-## 目录
+资料、计划不进入请求日志，令牌不预置在 APK 中。通知使用通用文案，不展示字段值。更多边界见 [使用限制与数据说明](../../docs/validation-and-data.md)。
 
-`app/src/main/.../data`：DTO、HTTP、设置与加密存储；`domain`：审批和通知纯逻辑；`ui`：Compose 与 ViewModel；`sync`：前台服务；`app/src/debug`：演示；`app/src/test`：自动测试。
-
-最新验收结果见 [手机端验证记录](../../docs/verification/2026-11-03-android.md)。旧 Android 设计中的依赖版本要求 SDK 37，本次按实际构建证据改用 SDK 36 兼容依赖，详见验证记录。
+[返回项目 README](../../README.md)

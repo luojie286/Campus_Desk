@@ -124,7 +124,7 @@ npm run desktop:build
 
 ### 配置真实业务后启动
 
-首次使用需完成独立账号和会话配置，参阅 [账号与会话说明](docs/account-switching.md)、[原型初始化记录](docs/poc-implementation.md) 和 [私网配置](docs/private-network.md)。原型记录中的样本昵称、路径和旧状态不是新用户默认配置。
+首次使用需完成独立账号、资料和会话配置，参阅 [运行与连接说明](docs/setup.md)。
 
 主机配置位于 `.private/config.json`，资料与任务位于 `.private/poc.sqlite`。先确认来源、账号、`pipeline=v2`、`messageCenter=true`，在接入与登录检查期间保持 `execute=false`。DeepSeek 相关功能读取主机进程环境变量 `DEEPSEEK_API_KEY`；仅创建 `.env` 文件不会自动加载它。
 
@@ -142,7 +142,7 @@ npm start
 npm run desktop:dev
 ```
 
-访问 `http://127.0.0.1:5173`，按界面配置连接。NapCat 和手机网关需要分别准备和启动；查看 [手动启动及交接说明](CODEX_HANDOFF.md)，不要重复启动占用同一端口的实例。
+访问 `http://127.0.0.1:5173`，按界面配置连接。NapCat 和手机网关需要分别准备和启动；查看 [运行与连接说明](docs/setup.md)，不要重复启动占用同一端口的实例。
 
 ### Android 构建
 
@@ -158,7 +158,7 @@ npm run desktop:dev
 
 - 当前是单用户、单主机的 Windows 开发原型；文档填写已实现腾讯表格，金山/WPS、飞书和微信接入尚未实现。
 - 手机通知依赖后台轮询，进程被清理后的恢复和全天可靠性仍待完善。
-- 真实消息、测试表读写及部分手机操作已有分阶段验证；复杂表格、部署范围与恢复边界见 [详细验证与限制](docs/validation-and-data.md)。
+- 复杂表格、部署范围与恢复能力仍有边界，见 [详细验证与限制](docs/validation-and-data.md)。
 
 ## 数据与凭据
 
@@ -175,15 +175,13 @@ mobile/tsnet-probe/go/   共享用户态私网桥接库源码
 desktop/                Web 工作台和 Tauri 壳
 test/                   后端自动测试
 tools/                  构建、运行和诊断脚本
-docs/                   设计、可行性分析和分阶段验证记录
+docs/                   运行说明、使用限制与 README 配图
 ```
 
-- [项目交接入口](CODEX_HANDOFF.md) / [历史交接](HANDOFF.md)
-- [Android 实施](docs/android-implementation.md) / [内嵌私网](docs/embedded-tailscale.md)
-- [通知与待办验证](docs/notification-and-todos.md) / [早报验证](docs/verification/2026-11-03-briefing.md)
-- [真实 QQ 与腾讯表格验证](docs/verification/2026-10-30.md)
-- [需求基线](docs/requirements.md) / [架构](docs/architecture.md) / [后台设计](docs/backend-design.md)
-- [最初最小原型范围](docs/minimal-poc.md)：历史基线，不是当前 Android 交付状态。
+- [运行与连接说明](docs/setup.md)
+- [Android 构建与使用](mobile/android/README.md) / [桌面开发](desktop/README.md)
+- [使用限制与数据说明](docs/validation-and-data.md)
+- [配图来源与重新生成](docs/images/readme/README.md)
 
 ## 许可证
 

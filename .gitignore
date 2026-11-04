@@ -15,6 +15,20 @@ desktop/src-tauri/gen/
 !.env.*.example
 handoff/
 
+# 本机开发约束、聊天交接、需求与过程记录不随发布源码上传
+/AGENTS.md
+/CODEX_HANDOFF.md
+/HANDOFF.md
+/CONTEXT.md
+/DEEPSEEK_PROMPT.md
+/PRD.md
+/tools/build_handoff.py
+/docs/*
+!/docs/images/
+!/docs/setup.md
+!/docs/validation-and-data.md
+!/docs/validation-and-data.en.md
+
 # 本机数据、数据库旁文件、备份和凭证；即使误放在 .private/ 外也不提交
 *.sqlite
 *.sqlite3

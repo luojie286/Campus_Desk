@@ -124,7 +124,7 @@ The first two commands install backend and desktop dependencies from their lockf
 
 ### Configure real use before starting
 
-First configure separate accounts and sessions. See [account and session setup](docs/account-switching.md), [prototype initialization notes](docs/poc-implementation.md), and [private networking](docs/private-network.md), currently documented in Chinese. Historical sample names, paths, and runtime states are not defaults for a new installation.
+First configure your accounts, profile, and dedicated sessions. See the [runtime and connection guide (Chinese)](docs/setup.md).
 
 Host configuration lives in `.private/config.json`; profiles and tasks live in `.private/poc.sqlite`. Check the source and account, use `pipeline=v2` and `messageCenter=true`, and keep `execute=false` during connection and login checks. DeepSeek features read `DEEPSEEK_API_KEY` from the host process environment; creating an `.env` file alone does not load it automatically.
 
@@ -142,7 +142,7 @@ Open another terminal for the desktop development UI:
 npm run desktop:dev
 ```
 
-Open `http://127.0.0.1:5173` and configure the connection. NapCat and the mobile gateway must be prepared and started separately; see the [manual startup and handoff notes (Chinese)](CODEX_HANDOFF.md). Do not start duplicate instances on occupied ports.
+Open `http://127.0.0.1:5173` and configure the connection. NapCat and the mobile gateway must be prepared and started separately; see the [runtime and connection guide (Chinese)](docs/setup.md). Do not start duplicate instances on occupied ports.
 
 ### Build Android
 
@@ -158,7 +158,7 @@ See the [Android guide (Chinese)](mobile/android/README.md) for details. The cur
 
 - This is a single-user, single-host Windows development prototype. Spreadsheet execution is implemented for Tencent Docs; KDocs/WPS, Feishu, and WeChat integration are not implemented.
 - Phone notifications depend on background polling. Recovery after process termination and all-day reliability still need work.
-- Real messages, test-spreadsheet reads and writes, and some phone operations have been validated in separate stages. See [detailed validation and limitations](docs/validation-and-data.en.md) for coverage, complex spreadsheet handling, deployment scope, and recovery boundaries.
+- Complex spreadsheet handling, deployment scope, and recovery capabilities have limits. See [usage limitations and data handling](docs/validation-and-data.en.md).
 
 ## Data and Credentials
 
@@ -175,17 +175,13 @@ mobile/tsnet-probe/go/   Shared userspace private-network bridge source
 desktop/                Web workspace and Tauri shell
 test/                   Backend automated tests
 tools/                  Build, runtime, and diagnostic scripts
-docs/                   Design, feasibility studies, and staged validation records
+docs/                   Runtime guides, usage limitations, and README images
 ```
 
-The following project documents are currently in Chinese:
-
-- [Current handoff](CODEX_HANDOFF.md) / [historical handoff](HANDOFF.md)
-- [Android implementation](docs/android-implementation.md) / [embedded private network](docs/embedded-tailscale.md)
-- [Notification and task validation](docs/notification-and-todos.md) / [briefing validation](docs/verification/2026-11-03-briefing.md)
-- [Real QQ and Tencent spreadsheet validation](docs/verification/2026-10-30.md)
-- [Requirements](docs/requirements.md) / [architecture](docs/architecture.md) / [backend design](docs/backend-design.md)
-- [Original minimal prototype scope](docs/minimal-poc.md): a historical baseline, not the current Android delivery status.
+- [Runtime and connection guide (Chinese)](docs/setup.md)
+- [Android build and usage (Chinese)](mobile/android/README.md) / [desktop development (Chinese)](desktop/README.md)
+- [Usage limitations and data handling](docs/validation-and-data.en.md)
+- [Image provenance and reproduction (Chinese)](docs/images/readme/README.md)
 
 ## License
 

@@ -1,62 +1,39 @@
 # 课桌桌面端
 
-消息中心与文档填写审批的桌面工作台。当前包含 **React + TypeScript + Vite Web MVP** 和 **Tauri 2 Windows 原生壳**；原生壳使用 Windows Credential Manager 保存访问令牌，不再依赖浏览器 localStorage。
+React + TypeScript + Vite 消息工作台，提供 Tauri 2 Windows 原生壳。用于查看消息与附件、保留待办候选、核对和批准文档计划，以及管理监听来源。
 
-窄屏响应式样式只是桌面窗口缩小时的 Web 预览，不是手机端交付。手机端按计划是独立的 Android 原生 App（Kotlin/Compose），不会复用这个网页作为最终客户端。
+## 开发与构建
 
-## 运行
-
-```powershell
-cd desktop
-npm install
-npm run dev
-```
-
-开发地址是 `http://127.0.0.1:5173`。Vite 会把 `/api` 代理到 `http://127.0.0.1:9087`，所以先在仓库根目录启动后台：
+在仓库根目录安装依赖并运行：
 
 ```powershell
-npm start
+npm --prefix desktop ci
+npm run desktop:dev
 ```
 
-打开页面后进入“连接设置”，填入后台服务地址与访问令牌。令牌来自本机 `.private/config.json`，不要提交到 Git 或发给别人。
-
-Web 生产构建：
+第一条按锁文件安装并重建桌面 `node_modules`；第二条启动 `http://127.0.0.1:5173` 开发界面，`/api` 转发到本机 `127.0.0.1:9087`。主机需独立配置并启动，见 [运行与连接说明](../docs/setup.md)。
 
 ```powershell
-npm run build
+npm run desktop:build
 ```
 
-Tauri 原生开发/构建（需要 Rust MSVC 工具链和 WebView2）：
+检查 TypeScript 并生成 Web 构建，产物位于 `desktop/dist/`。
+
+构建 Tauri 壳还需 Rust MSVC 工具链与 WebView2：
 
 ```powershell
-npm run tauri:dev
-npm run tauri:build
+npm --prefix desktop run tauri:dev
+npm --prefix desktop run tauri:build
 ```
 
-Tauri 构建产物在 `src-tauri/target/release/` 下；首次编译需要下载并编译 Rust 依赖，时间较长。
+两条分别用于原生开发和构建，产物位于 `src-tauri/target/`，不提交到源码仓库。
 
-## 第一版范围
+## 连接与凭据
 
-- 消息中心：来源列表、未读数、消息详情、下载/提取/不支持等附件状态、文档链接入口；支持 PDF、DOCX 和图片 OCR 文字提取，不支持的格式会生成站内通知。
-- 图片 OCR 使用本地 Tesseract 模型，模型文件放在被忽略的 `.private/ocr/`，不会上传到 Git 或第三方视觉模型。
-- 待办候选：会话级 LLM 过滤闲聊，文本和已提取的附件文字按同一事务合并；详情显示合并来源。
-- 待办清单：聊天/文件总结出的正式待办，保留后只进入清单，不自动执行。
-- 审批请求：文档填写任务、拟填单元格、原值/拟填值、缺字段问答、批准并写入、取消。
-- 恢复操作：结果未知任务可只读核对（不会重写）；登录暂停或写前失败的任务可重新准备。核对结果会在详情中自动刷新。
-- 连接设置：服务地址、令牌、健康检查；监听对象管理可选择群聊、群成员或好友，并刷新群名/备注名称。监听对象选择与名称刷新需要 NapCat 已登录且 9088 API 可用。
+在设置中填写服务地址和本机访问令牌。浏览器开发版使用 localStorage；Tauri 壳使用 Windows Credential Manager，前端仅在内存中使用解密后的令牌。
 
-第一版不做 Agent 自由对话、多 Agent 编排或其他文档平台。
+监听对象选择及名称刷新需要 NapCat 已登录且本机 OneBot API 可用。待办保留不批准文档写入；结果未知任务的核对只读，不自动重写。
 
-## 隐私与凭据
+Windows 正式安装分发、签名、系统通知和开机自启仍需完善。Android 是独立原生客户端，桌面窄屏布局不是手机端交付。
 
-- 消息、附件和审批保存在本机 SQLite；页面不接触浏览器会话或腾讯账号。
-- 浏览器开发版把令牌放在 `localStorage`，只适合本机。
-- Tauri 版通过 Rust `keyring` 写入 Windows Credential Manager，前端只保留内存中的令牌；设置页保存/清除令牌会调用原生命令。
-- 第一次在 Tauri 设置页点击“保存设置”后，令牌会持久化；退出再打开会自动读取，不需要重复输入。浏览器开发版仍使用 localStorage。
-- 页面不硬编码用户、群、文档 URL、平台或执行器；来源、计划和问题都由 API 返回。
-
-## Tauri 壳
-
-`src-tauri/` 已包含 Tauri 2 窗口、Windows Credential Manager 令牌存储和默认 capability。后端只对 `localhost:5173`、`127.0.0.1:5173` 与 Tauri 本机来源放行 CORS，接口仍需 Bearer 令牌。
-
-仍待完善：Windows 安装包图标/签名、系统通知、开机自启和崩溃恢复。
+[返回项目 README](../README.md)
