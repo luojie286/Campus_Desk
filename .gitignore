@@ -12,12 +12,45 @@ desktop/src-tauri/gen/
 .env
 .env.*
 !.env.example
+!.env.*.example
 handoff/
+
+# 本机数据、数据库旁文件、备份和凭证；即使误放在 .private/ 外也不提交
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.bak
+*.pid
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+/backups/
+
+# Python 辅助脚本的本机环境与缓存
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# 操作系统生成文件
+.DS_Store
+Thumbs.db
+Desktop.ini
 
 # 安装包和运行诊断不属于源码；Gradle wrapper jar 仍需提交
 *.apk
 *.aab
 *.apks
+*.aar
 *.hprof
 
 # Android 手机端工程（mobile/android）的本地与构建产物
