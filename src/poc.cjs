@@ -31,6 +31,7 @@ const {suggestFromConversation}=require('./suggest/conversation.cjs');
 const {createV2Handler}=require('./api/v2.cjs');
 const {createBriefingRepository}=require('./briefings/repository.cjs');
 const {processBriefing}=require('./briefings/worker.cjs');
+const {PREFIX:assistantPrefix,startAssistant}=require('./assistant/api.cjs');
 fs.mkdirSync('.private',{recursive:true});
 const configPath='.private/config.json';
 if(!fs.existsSync(configPath)){
@@ -534,17 +535,22 @@ async function main(){
     const manifest=backupDatabase('.private/poc.sqlite',target);
     console.log(JSON.stringify({stage:'backup_complete',target,size:manifest.size,sha256:manifest.sha256,integrity:manifest.integrity},null,2));
   }
-  else if(command==='serve'){
-    store.recover();
-    jobsRepo.recoverExpired(new Date().toISOString());
+  else if(command==='serve'||command==='serve-assistant'){
+    const assistantOnly=command==='serve-assistant';
+    const assistant=startAssistant({db:store.db,owner:String(config.account_id||''),port:config.port,oldToken:config.token});
+    if(assistantOnly&&!assistant)throw Error('assistant_unavailable');
+    if(!assistantOnly){
+      store.recover();
+      jobsRepo.recoverExpired(new Date().toISOString());
+    }
     const accountRef=config.account_id?String(config.account_id):'';
-    if(accountRef&&sourcesRepo.list({accountRef}).length===0){
+    if(!assistantOnly&&accountRef&&sourcesRepo.list({accountRef}).length===0){
       sourcesRepo.seedFromConfig({accountRef,source:config.source,displayName:config.source_name||null});
     }
-    if(accountRef)messagesRepo.backfillNames({accountRef});
+    if(!assistantOnly&&accountRef)messagesRepo.backfillNames({accountRef});
     const setupNonce=crypto.randomBytes(20).toString('hex');
     const setupBase='/setup/'+setupNonce;
-    fs.writeFileSync('.private/setup-url.txt','http://127.0.0.1:'+config.port+setupBase);
+    if(!assistantOnly)fs.writeFileSync('.private/setup-url.txt','http://127.0.0.1:'+config.port+setupBase);
     const server=http.createServer(async(req,res)=>{
       res.setHeader('Content-Type','application/json');
       // Tauri 2 的 WebView 与开发浏览器需要明确允许的本机来源；令牌仍然必需。
@@ -558,18 +564,23 @@ async function main(){
       }
       if(req.method==='OPTIONS'){res.statusCode=204;res.end();return;}
       const respond=(status,data)=>{res.statusCode=status;res.end(JSON.stringify(data));};
-      if(req.method==='GET'&&req.url?.split('?')[0]===setupBase+'/qr.png'){
+      if(!assistantOnly&&req.method==='GET'&&req.url?.split('?')[0]===setupBase+'/qr.png'){
         const qr='.private/vendor/napcat-4.18.41/cache/qrcode.png';
         if(!fs.existsSync(qr))return respond(404,{error:'qr_not_ready'});
         res.setHeader('Cache-Control','no-store');res.setHeader('Content-Type','image/png');res.end(fs.readFileSync(qr));return;
       }
-      if(req.method==='GET'&&req.url===setupBase){
+      if(!assistantOnly&&req.method==='GET'&&req.url===setupBase){
         res.setHeader('Content-Type','text/html; charset=utf-8');res.setHeader('Cache-Control','no-store');
         res.end(`<!doctype html><meta charset="utf-8"><title>QQ 后台登录</title><h2>手机 QQ 扫码登录后台适配器</h2><p>此二维码每三秒刷新显示；请扫码并在手机确认。</p><img id="qr" width="300" height="300" src="${setupBase}/qr.png"><p>这是本机后台适配器的二维码。腾讯文档需在专用 Edge 中另行登录。</p><script>setInterval(()=>document.getElementById('qr').src='${setupBase}/qr.png?t='+Date.now(),3000)</script>`);return;
       }
       if(req.method==='GET'&&req.url==='/health')return respond(200,{running:true,sourceConfigured:!!config.source.id,busy});
       const requestUrl=new URL(req.url||'/','http://127.0.0.1');
       const pathname=requestUrl.pathname;
+      if(pathname===assistantPrefix||pathname.startsWith(assistantPrefix+'/')){
+        if(!assistant)return respond(404,{error:'not_found'});
+        return assistant(req,res,requestUrl);
+      }
+      if(assistantOnly)return respond(404,{error:'not_found'});
       if(pathname.startsWith('/v1/brief')||pathname.startsWith('/v1/messages')||pathname.startsWith('/v1/suggestions')||pathname.startsWith('/v1/todos')||pathname.startsWith('/v1/tasks')||pathname==='/v1/sources'||pathname.startsWith('/v1/listen-sources')||pathname.startsWith('/v1/notifications')||pathname.startsWith('/v1/contacts/')){
         const handled=await v2Handler(req,res,pathname,requestUrl.searchParams);
         if(handled)return;
@@ -619,7 +630,8 @@ async function main(){
       if(!auth)return respond(401,{error:'unauthorized'});
       try{const result=acceptEvent(JSON.parse(body));respond(200,result);setImmediate(()=>drain().catch(()=>{}));}catch{return respond(400,{error:'invalid_event'});}
     });
-    server.listen(config.port,'127.0.0.1',()=>console.log('Listening on http://127.0.0.1:'+config.port+'; POST /onebot'));
+    server.listen(config.port,'127.0.0.1',()=>console.log('Listening on http://127.0.0.1:'+config.port+(assistantOnly?'; assistant only':'; POST /onebot')));
+    if(assistantOnly)return;
     setInterval(()=>drain().catch(()=>{}),2000).unref();
     drainBriefing().catch(()=>{});
     setInterval(()=>drainBriefing().catch(()=>{}),30000).unref();

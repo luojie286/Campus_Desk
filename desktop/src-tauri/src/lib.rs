@@ -31,13 +31,42 @@ fn delete_api_token() -> Result<(), String> {
     }
 }
 
+fn assistant_entry() -> Result<Entry, String> {
+    Entry::new(KEYRING_SERVICE, "assistant-token").map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_assistant_token(token: String) -> Result<(), String> {
+    assistant_entry()?.set_password(&token).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_assistant_token() -> Result<Option<String>, String> {
+    match assistant_entry()?.get_password() {
+        Ok(token) => Ok(Some(token)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[tauri::command]
+fn delete_assistant_token() -> Result<(), String> {
+    match assistant_entry()?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             save_api_token,
             get_api_token,
-            delete_api_token
+            delete_api_token,
+            save_assistant_token,
+            get_assistant_token,
+            delete_assistant_token
         ])
         .run(tauri::generate_context!())
         .expect("error while running campus desk");

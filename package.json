@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "fast-xml-parser": "5.11.2",
+    "jszip": "3.10.2",
     "mammoth": "1.13.0",
     "pdf-parse": "2.4.5",
     "playwright": "1.62.1",
@@ -19,8 +20,5 @@
     "desktop:dev": "npm --prefix desktop run dev",
     "desktop:build": "npm --prefix desktop run build",
     "logs": "node tools/show-task-log.cjs"
-  },
-  "devDependencies": {
-    "jszip": "^3.10.2"
   }
 }

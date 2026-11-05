@@ -195,4 +195,4 @@ export interface Operation {
   idempotency_key: string;
 }
 
-export type View = 'inbox' | 'todos' | 'approvals' | 'settings';
+export type View = 'inbox' | 'todos' | 'approvals' | 'settings' | 'assistant';

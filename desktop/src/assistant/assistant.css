@@ -1,0 +1,21 @@
+.assistant-page .settings-card { display: grid; gap: 12px; }
+.assistant-page h2, .assistant-page h3 { margin: 0; }
+.assistant-page label { display: grid; gap: 5px; }
+.assistant-page input:not([type=checkbox]), .assistant-page textarea, .assistant-page select {
+  font: inherit;
+  width: 100%;
+  border: 1px solid #ccd5e1;
+  border-radius: 8px;
+  padding: 9px;
+  color: inherit;
+  background: white;
+}
+.assistant-page textarea { min-height: 76px; resize: vertical; }
+.assistant-page .assistant-checkbox { display: flex; align-items: center; gap: 8px; }
+.assistant-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.assistant-entries { display: grid; gap: 6px; max-height: 270px; overflow: auto; }
+.assistant-turn, .assistant-doc { border-top: 1px solid #e3e8ee; padding: 10px 0; }
+.assistant-doc > span { margin-left: 10px; }
+.assistant-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.assistant-source { margin: 3px 5px 3px 0; text-align: left; }
+.assistant-approval { max-height: 82vh; overflow: auto; overflow-wrap: anywhere; }

@@ -23,6 +23,7 @@ import {
   X
 } from 'lucide-react';
 import * as api from './api';
+import Assistant from './assistant/Assistant';
 import type {ContactFriend, ContactGroup, ContactMember, ListenSource, Message, Notification, Plan, SourceRow, Suggestion, Task, Todo, View} from './types';
 
 const REFRESH_MS = 5000;
@@ -389,6 +390,7 @@ function App() {
     },
     todos: {title: '待办清单', subtitle: '保留的候选会进入这里，但不会自动执行', icon: ListTodo},
     approvals: {title: '审批请求', subtitle: '文档填写任务在批准后才会写入', icon: FileCheck2},
+    assistant: {title: '个人知识库', subtitle: '导入资料、查阅原文并提问', icon: Sparkles},
     settings: {title: '连接设置', subtitle: '连接本机后台并管理访问令牌', icon: Settings}
   }[view];
   const HeaderIcon = viewMeta.icon;
@@ -414,6 +416,7 @@ function App() {
         </div>
 
         <div className="sidebar-actions">
+          <button className="icon-button subtle" title="个人知识库" onClick={() => setView('assistant')} aria-label="个人知识库"><Sparkles size={17} /></button>
           <button className="new-button" onClick={() => setView('settings')}>
             <Plus size={15} />
             <span>连接来源</span>
@@ -514,15 +517,16 @@ function App() {
 
         <div className="main-scroll">
           <div className="content-column">
-            {!hasToken && (
+            {!hasToken && view !== 'assistant' && (
               <div className="callout callout-warm">
                 <ShieldCheck size={18} />
                 <div><strong>先连接本机服务</strong><p>在设置里填入服务地址和访问令牌，令牌只会保存在本机。</p></div>
                 <button className="button primary" onClick={() => setView('settings')}>去设置</button>
               </div>
             )}
-            {error && <div className="callout callout-error" role="alert"><CircleAlert size={17} /><span>{error}</span></div>}
-            {notice && <div className="callout callout-info"><CheckCircle2 size={17} /><span>{notice}</span></div>}
+            {view !== 'assistant' && error && <div className="callout callout-error" role="alert"><CircleAlert size={17} /><span>{error}</span></div>}
+            {view !== 'assistant' && notice && <div className="callout callout-info"><CheckCircle2 size={17} /><span>{notice}</span></div>}
+            {view === 'assistant' && <Assistant />}
 
             {view === 'inbox' && (
               <div className="stream">
@@ -599,7 +603,7 @@ function App() {
           </div>
         </div>
 
-        {view !== 'settings' && (
+        {view !== 'settings' && view !== 'assistant' && (
           <div className="composer-area">
             <div className="composer">
               <button className="composer-button" onClick={() => setView('settings')} aria-label="连接设置"><Plus size={17} /></button>

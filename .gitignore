@@ -47,6 +47,7 @@ handoff/
 *.pfx
 *.jks
 *.keystore
+*.dpapi
 /backups/
 
 # Python 辅助脚本的本机环境与缓存
