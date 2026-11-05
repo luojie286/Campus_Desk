@@ -185,4 +185,6 @@ docs/                   Runtime guides, usage limitations, and README images
 
 ## License
 
-A project license has not yet been selected. Publishing to GitHub and choosing an open-source license are separate decisions. Before public distribution, define the project's usage terms and review the licenses and distribution requirements of its third-party components.
+This project is licensed under the [MIT License](LICENSE), which permits use, modification, distribution, and commercial use, subject to retaining the required copyright and permission notices. The software is provided as is, without warranty.
+
+Third-party code and dependencies remain subject to their respective licenses. Distributions must comply with the applicable copyright notice and license requirements.
