@@ -1,5 +1,6 @@
 const { DatabaseSync } = require('node:sqlite');
 const crypto = require('node:crypto');
+const profiles = require('./documents/profile.cjs');
 
 function canonicalUrl(raw) {
   const u = new URL(raw);
@@ -40,28 +41,24 @@ function openStore(file) {
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
     CREATE TABLE IF NOT EXISTS profile(id INTEGER PRIMARY KEY CHECK(id=1),name TEXT NOT NULL,student_id TEXT NOT NULL,sex TEXT NOT NULL,age INTEGER NOT NULL,provided_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS profile_fields(key TEXT PRIMARY KEY,value TEXT NOT NULL,source TEXT,updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS profile_deleted_fields(key TEXT PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS reservations(url TEXT NOT NULL,header_row INTEGER NOT NULL,"row" INTEGER NOT NULL,name_col INTEGER NOT NULL,student_col INTEGER NOT NULL,placeholder TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(url,"row"));
     CREATE TABLE IF NOT EXISTS runs(id INTEGER PRIMARY KEY,source_key TEXT NOT NULL,url TEXT NOT NULL,state TEXT NOT NULL,plan TEXT,error TEXT,updated_at TEXT NOT NULL,UNIQUE(source_key,url));`);
   return {
     db,
-    profile(){const p=db.prepare('SELECT * FROM profile WHERE id=1').get();if(!p)throw Error('profile_missing');return p;},
-    saveProfile(p){db.prepare('INSERT OR REPLACE INTO profile VALUES(1,?,?,?,?,?)').run(p.name,String(p.student_id),p.sex,p.age,new Date().toISOString());},
-    // 键值字段用于任意表头映射；旧 profile 行继续作为姓名/学号等基础字段的默认来源。
-    fields(){
-      const out={};
-      for(const row of db.prepare('SELECT key,value FROM profile_fields').all())out[row.key]=row.value;
-      const p=db.prepare('SELECT * FROM profile WHERE id=1').get();
-      if(p){
-        if(out.name===undefined)out.name=p.name;
-        if(out.student_id===undefined)out.student_id=p.student_id;
-        if(out.sex===undefined)out.sex=p.sex;
-        if(out.age===undefined)out.age=String(p.age);
-      }
-      return out;
+    profile(){
+      const p=profiles.fields(db);
+      if(!p.name||!p.student_id||!p.sex||!p.age)throw Error('profile_missing');
+      const age=Number(p.age);
+      if(!Number.isSafeInteger(age))throw Error('invalid_profile');
+      return {id:1,name:p.name,student_id:p.student_id,sex:p.sex,age,
+        provided_at:db.prepare('SELECT provided_at FROM profile WHERE id=1').get()?.provided_at??null};
     },
+    saveProfile(p){profiles.saveProfile(db,p);},
+    // 键值字段用于任意表头映射；旧 profile 行继续作为姓名/学号等基础字段的默认来源。
+    fields(){return profiles.fields(db);},
     setField(key,value,source='manual'){
-      db.prepare('INSERT OR REPLACE INTO profile_fields(key,value,source,updated_at) VALUES(?,?,?,?)')
-        .run(String(key),String(value),String(source),new Date().toISOString());
+      profiles.setField(db,key,value,source);
     },
     listFields(){
       return db.prepare('SELECT key,source,updated_at,length(value) AS value_length FROM profile_fields ORDER BY key').all();

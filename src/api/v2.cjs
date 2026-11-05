@@ -505,7 +505,7 @@ function createV2Handler({messages,suggestions,tasks,jobs,files,sources,notifica
         send(res,404,{error:message});
       }else if(message==='task_account_mismatch'){
         send(res,403,{error:message});
-      }else if(message==='suggestion_already_decided'||message.startsWith('invalid_transition_')||message==='plan_not_current'||message==='task_state_conflict'||message==='execute_disabled'||message==='reconcile_not_available'){
+      }else if(message==='suggestion_already_decided'||message.startsWith('invalid_transition_')||message==='plan_not_current'||message==='profile_changed'||message==='task_state_conflict'||message==='execute_disabled'||message==='reconcile_not_available'){
         send(res,409,{error:message});
       }else if(message==='task_repository_unavailable'||message==='job_repository_unavailable'||message==='source_repository_unavailable'||message==='contact_service_unavailable'||message==='notification_repository_unavailable'){
         send(res,503,{error:message});

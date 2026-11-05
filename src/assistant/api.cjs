@@ -98,10 +98,10 @@ async function callModel(model, evidence, question, signal, fetchModel) {
   };
 }
 
-function createAssistant({ db, owner, storage, trashRoot, languagePath, token, models = [], port, profileFixture = false, fetchModel = fetch }) {
+function createAssistant({ db, owner, storage, trashRoot, languagePath, token, models = [], port, fetchModel = fetch }) {
   const epoch = randomUUID();
   const sessions = new Map();
-  const knowledge = createKnowledge({ db, owner, storage, trashRoot, languagePath, profileFixture });
+  const knowledge = createKnowledge({ db, owner, storage, trashRoot, languagePath });
   let sequence = 0;
   let running = 0;
 
@@ -112,13 +112,25 @@ function createAssistant({ db, owner, storage, trashRoot, languagePath, token, m
   }
 
   function publicSession(value) {
-    return { id: value.id, state: value.state, seq: value.seq, turns: value.turns.map(({ controller, fingerprint, ...turn }) => turn) };
+    const turns = value.turns.map(({ controller, fingerprint, modelEvidence, ...turn }) => {
+      if (!turn.result) return turn;
+      const stillCurrent = item => {
+        try { return knowledge.getEvidence(item.id).revision === item.revision; } catch { return false; }
+      };
+      if (modelEvidence?.some(item => !stillCurrent(item))) {
+        return { ...turn, result: { status: 'source_changed', evidence: [] } };
+      }
+      const evidence = turn.result.evidence.filter(stillCurrent);
+      const status = turn.result.evidence.length && !evidence.length ? 'source_changed' : turn.result.status;
+      return { ...turn, result: { ...turn.result, status, evidence } };
+    });
+    return { id: value.id, state: value.state, seq: value.seq, turns };
   }
 
   async function runTurn(value, turn, input) {
     try {
       const matches = knowledge.search(turn.question, input.sourceIds);
-      const allowed = input.useModel === true ? matches.filter(knowledge.cloudAllowed) : [];
+      const allowed = input.useModel === true ? matches.filter(knowledge.cloudAllowed).slice(0, 20) : [];
       const model = models.find(entry => entry.id === input.modelId);
       if (!matches.length) {
         turn.result = { status: 'no_evidence', answer: '', evidence: [] };
@@ -129,10 +141,12 @@ function createAssistant({ db, owner, storage, trashRoot, languagePath, token, m
         turn.evidence = allowed.map(item => item.id);
         const result = await callModel(model, allowed, turn.question, turn.controller.signal, fetchModel);
         if (turn.controller.signal.aborted || !allowed.every(knowledge.cloudAllowed)) fail('cloud_grant_required', 403);
+        turn.modelEvidence = allowed.map(({ id, revision }) => ({ id, revision }));
         if (!result.answer.trim() || !result.citations.length) {
           turn.result = { status: 'no_evidence', answer: '', evidence: [] };
         } else {
           turn.result = { status: 'answered', answer: result.answer, supplement: result.supplement,
+            limited: allowed.length < matches.length,
             evidence: allowed.filter(item => result.citations.includes(item.id)), tokens: result.tokens };
         }
       }
@@ -204,8 +218,10 @@ function createAssistant({ db, owner, storage, trashRoot, languagePath, token, m
           return send(200, { items: knowledge.documents(offset) });
         }
         if (endpoint === '/grants') return send(200, { items: knowledge.grants() });
+        if (endpoint === '/todos') return send(200, { items: knowledge.todos() });
+        if (endpoint === '/profile') return send(200, { items: knowledge.profile() });
         if (endpoint === '/sessions') return send(200, { items: [...sessions.values()].map(value => ({ id: value.id, state: value.state })) });
-        const match = endpoint.match(/^\/(roots|knowledge|evidence|previews|operations|sessions|fixture-fields)\/([a-zA-Z0-9_-]+)(\/entries)?$/);
+        const match = endpoint.match(/^\/(roots|knowledge|evidence|previews|operations|sessions)\/([a-zA-Z0-9_-]+)(\/entries)?$/);
         if (!match) fail('not_found', 404);
         const [, resource, id, entries] = match;
         if (resource === 'roots' && entries) {
@@ -219,7 +235,6 @@ function createAssistant({ db, owner, storage, trashRoot, languagePath, token, m
         if (resource === 'previews') return send(200, knowledge.getPreview(id));
         if (resource === 'operations') return send(200, knowledge.operation(id));
         if (resource === 'sessions') return send(200, publicSession(session(id)));
-        if (resource === 'fixture-fields' && profileFixture) return send(200, { value: knowledge.fixtureField(id) });
       }
       if (method === 'POST') {
         const body = await requestBody(req);
@@ -227,7 +242,7 @@ function createAssistant({ db, owner, storage, trashRoot, languagePath, token, m
         const review = endpoint.match(/^\/previews\/([a-zA-Z0-9_-]+)\/decision$/);
         if (review) {
           const result = knowledge.decide(review[1], body);
-          if (['cloud_revoke', 'remove_root', 'trash', 'import'].includes(result.kind)) invalidateUnauthorized();
+          if (['cloud_revoke', 'remove_root', 'trash', 'import', 'profile'].includes(result.kind)) invalidateUnauthorized();
           return send(200, result);
         }
         if (endpoint === '/sessions') {

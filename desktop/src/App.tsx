@@ -153,6 +153,7 @@ function toneFor(value: string) {
 
 function App() {
   const [view, setView] = useState<View>('inbox');
+  const [assistantCandidate, setAssistantCandidate] = useState<number>();
   const [sources, setSources] = useState<SourceRow[]>([]);
   const [listenSources, setListenSources] = useState<ListenSource[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -394,6 +395,11 @@ function App() {
     settings: {title: '连接设置', subtitle: '连接本机后台并管理访问令牌', icon: Settings}
   }[view];
   const HeaderIcon = viewMeta.icon;
+  function openTodoAdmission(id: number) {
+    closeDetail();
+    setAssistantCandidate(id);
+    setView('assistant');
+  }
   const placeholder = view === 'inbox' ? '搜索消息、发送者或文件名' : view === 'todos' ? '搜索待办' : view === 'approvals' ? '搜索任务或文档链接' : '搜索当前视图';
 
   return (
@@ -526,7 +532,7 @@ function App() {
             )}
             {view !== 'assistant' && error && <div className="callout callout-error" role="alert"><CircleAlert size={17} /><span>{error}</span></div>}
             {view !== 'assistant' && notice && <div className="callout callout-info"><CheckCircle2 size={17} /><span>{notice}</span></div>}
-            {view === 'assistant' && <Assistant />}
+            {view === 'assistant' && <Assistant candidate={assistantCandidate} onCandidateDone={() => setAssistantCandidate(undefined)} />}
 
             {view === 'inbox' && (
               <div className="stream">
@@ -543,6 +549,7 @@ function App() {
                     onSelectMessage={openMessage}
                     onOpenTask={openTask}
                     onAccept={id => run(() => api.acceptSuggestion(id), '已保留为待办。')}
+                    onAdmit={openTodoAdmission}
                     onDismiss={id => run(() => api.dismissSuggestion(id), '已忽略这条候选。')}
                   />
                 ))}
@@ -664,6 +671,7 @@ function App() {
                 busy={busy}
                 onOpenTask={openTask}
                 onAccept={id => run(() => api.acceptSuggestion(id), '已保留为待办。')}
+                onAdmit={openTodoAdmission}
                 onDismiss={id => run(() => api.dismissSuggestion(id), '已忽略这条候选。')}
               />
             ) : null}
@@ -682,6 +690,7 @@ function MessageCard({
   onSelectMessage,
   onOpenTask,
   onAccept,
+  onAdmit,
   onDismiss
 }: {
   message: Message;
@@ -691,6 +700,7 @@ function MessageCard({
   onSelectMessage: (id: number) => void;
   onOpenTask: (id: number) => void;
   onAccept: (id: number) => void;
+  onAdmit: (id: number) => void;
   onDismiss: (id: number) => void;
 }) {
   return (
@@ -747,6 +757,7 @@ function MessageCard({
             {(suggestion.source_count || 1) > 1 && <div className="ai-sources-summary">已合并 {suggestion.source_count} 条来源消息</div>}
             <div className="ai-actions">
               <button className="button primary small" disabled={busy} onClick={() => onAccept(suggestion.id)}>保留为待办</button>
+              <button className="button ghost small" disabled={busy} onClick={() => onAdmit(suggestion.id)}>保留并纳入知识库</button>
               <button className="button ghost small" disabled={busy} onClick={() => onDismiss(suggestion.id)}>忽略</button>
               <button className="text-action" onClick={() => onSelectMessage(message.id)}>详情</button>
               <span className="category">{CATEGORY_LABELS[suggestion.category] || suggestion.category}</span>
@@ -768,6 +779,7 @@ function MessageDetail({
   busy,
   onOpenTask,
   onAccept,
+  onAdmit,
   onDismiss
 }: {
   message: Message;
@@ -775,6 +787,7 @@ function MessageDetail({
   busy: boolean;
   onOpenTask: (id: number) => void;
   onAccept: (id: number) => void;
+  onAdmit: (id: number) => void;
   onDismiss: (id: number) => void;
 }) {
   return (
@@ -846,6 +859,7 @@ function MessageDetail({
             {suggestion.status === 'pending' ? (
               <div className="ai-actions">
                 <button className="button primary small" disabled={busy} onClick={() => onAccept(suggestion.id)}>保留为待办</button>
+                <button className="button ghost small" disabled={busy} onClick={() => onAdmit(suggestion.id)}>保留并纳入知识库</button>
                 <button className="button ghost small" disabled={busy} onClick={() => onDismiss(suggestion.id)}>忽略</button>
               </div>
             ) : <span className="category">{suggestion.status === 'accepted' ? '已保留' : '已忽略'}</span>}

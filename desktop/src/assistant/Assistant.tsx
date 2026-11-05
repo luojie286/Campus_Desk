@@ -6,12 +6,14 @@ import './assistant.css';
 
 type Root = {id: string; path: string};
 type Entry = {name: string; directory: boolean};
-type Document = {id: string; name: string; rootId: string | null; status: string; text?: string};
+type Document = {id: string; name: string; rootId: string | null; status: string; text?: string; kind?: 'file' | 'todo'};
 type Evidence = {id: string; title: string; locator: string; quote: string};
-type Result = {status: string; answer?: string; supplement?: string; evidence: Evidence[]};
+type Result = {status: string; answer?: string; supplement?: string; limited?: boolean; evidence: Evidence[]};
 type Session = {id: string; state: string; turns: {id: string; question: string; result?: Result}[]};
 type Preview = {id: string; digest: string; details: {
   kind: string; path?: string; label?: string; name?: string; target?: string; blob?: string;
+  key?: string; before?: string | null; value?: string | null;
+  items?: {id: number; title: string; messages: {id: number; text: string | null}[]}[];
   rows?: {name: string; sha256: string; bytes: number; chunks: number; unchanged: boolean; before?: string; text?: string; target: string}[];
 }};
 type Model = {id: string; label: string};
@@ -24,6 +26,9 @@ const feedback: Record<string, string> = {
   model_failed: '模型请求失败，可继续查看本机检索结果。',
   model_unavailable: '所选模型暂不可用。',
   preview_changed: '目标已变化，请重新预览。',
+  profile_busy: '正在写表或回读，完成后再更新个人资料。',
+  source_changed: '来源已变化，请重新提问。',
+  todo_unavailable: '待办状态已变化，请刷新后重试。',
   outside_scope: '该资源不在当前授权范围内。',
   assistant_unavailable: '助手服务尚未启用。',
   not_found: '资源不存在，或助手服务尚未启用。',
@@ -52,7 +57,11 @@ function message(error: unknown) {
   return feedback[code] || '助手操作失败（' + code + '）。';
 }
 
-export default function Assistant() {
+type TodoItem = {id: number; title: string; admitted: number};
+type Field = {key: string; value: string};
+const profileLabels: Record<string, string> = {name: '姓名', student_id: '学号', sex: '性别', age: '年龄', major: '专业', phone: '电话', email: '邮箱'};
+
+export default function Assistant({candidate, onCandidateDone}: {candidate?: number; onCandidateDone?: () => void}) {
   const [token, setToken] = useState(browserToken);
   const [tokenDraft, setTokenDraft] = useState('');
   const [models, setModels] = useState<Model[]>([]);
@@ -76,20 +85,28 @@ export default function Assistant() {
   const [decisionId, setDecisionId] = useState('');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  const [todos, setTodos] = useState<TodoItem[]>([]);
+  const [todoSelection, setTodoSelection] = useState<number[]>([]);
+  const [profile, setProfile] = useState<Field[]>([]);
+  const [fieldDraft, setFieldDraft] = useState<Field>({key: '', value: ''});
 
   async function refresh(credentials: string, offset = 0) {
-    const [cap, folders, knowledge, chats, cloud] = await Promise.all([
+    const [cap, folders, knowledge, chats, cloud, openTodos, fields] = await Promise.all([
       api<{models: Model[]}>(credentials, '/capabilities'),
       api<{items: Root[]}>(credentials, '/roots'),
       api<{items: Document[]}>(credentials, '/knowledge?offset=' + offset),
       api<{items: {id: string}[]}>(credentials, '/sessions'),
-      api<{items: {target: string}[]}>(credentials, '/grants')
+      api<{items: {target: string}[]}>(credentials, '/grants'),
+      api<{items: TodoItem[]}>(credentials, '/todos'),
+      api<{items: Field[]}>(credentials, '/profile')
     ]);
     setModels(cap.models);
     setModel(old => cap.models.some(entry => entry.id === old) ? old : cap.models[0]?.id || '');
     setRoots(folders.items);
     setDocs(knowledge.items);
     setGrants(cloud.items.map(item => item.target));
+    setTodos(openTodos.items);
+    setProfile(fields.items);
     setDocOffset(offset);
     if (chats.items.length) setSession(await api<Session>(credentials, '/sessions/' + chats.items.at(-1)?.id));
   }
@@ -196,6 +213,7 @@ export default function Assistant() {
             {turn.result && <>
               <p className="assistant-text">{turn.result.answer || feedback[turn.result.status] || turn.result.status}</p>
               {turn.result.supplement && <p>模型补充 · {turn.result.supplement}</p>}
+              {turn.result.limited && <p>模型回答仅覆盖本次获授权且纳入上下文的资料。</p>}
               {turn.result.evidence.map(item => <button className="button assistant-source" key={item.id} onClick={() =>
                 void run(async () => setReference(await api<Evidence>(token, '/evidence/' + item.id)))}>
                 {item.title} · {item.locator}
@@ -204,6 +222,43 @@ export default function Assistant() {
           </article>)}
           {reference && <div className="assistant-turn"><strong>{reference.title} · {reference.locator}</strong><p className="assistant-text">{reference.quote}</p>
             <button className="button" onClick={() => setReference(undefined)}>收起引用</button></div>}
+        </section>
+        <section className="settings-card">
+          <h2>待办纳入知识库</h2>
+          <button className="button" disabled={busy} onClick={() => void run(() => refresh(token, docOffset))}>刷新待办与资料</button>
+          {candidate !== undefined && <div className="assistant-actions">
+            <button className="button primary" disabled={busy || !!preview} onClick={() => void run(() =>
+              review({kind: 'accept_todo', suggestionId: candidate}))}>预览保留并纳入</button>
+            <button className="button" onClick={onCandidateDone}>返回普通纳入</button>
+          </div>}
+          <div className="assistant-entries">{todos.map(todo => <div className="assistant-actions" key={todo.id}>
+            <label className="assistant-checkbox"><input type="checkbox" checked={todoSelection.includes(todo.id)}
+              disabled={!todoSelection.includes(todo.id) && todoSelection.length >= 16}
+              onChange={event => setTodoSelection(items => event.target.checked ? [...items, todo.id] : items.filter(id => id !== todo.id))} />
+              {todo.title} · 已纳入 {todo.admitted} 条来源</label>
+            <button className="button" disabled={busy || !!preview} onClick={() => void run(() => review({
+              kind: grants.includes('todo-' + todo.id) ? 'cloud_revoke' : 'cloud_grant', documentId: 'todo-' + todo.id
+            }))}>{grants.includes('todo-' + todo.id) ? '撤销标题模型授权' : '预览标题模型授权'}</button>
+          </div>)}</div>
+          <button className="button" disabled={busy || !!preview || !todoSelection.length} onClick={() => void run(() =>
+            review({kind: 'admit_todos', todoIds: todoSelection}))}>预览批量纳入</button>
+        </section>
+        <section className="settings-card">
+          <h2>个人资料</h2>
+          {profile.map(field => <div key={field.key} className="assistant-actions">
+            <span>{profileLabels[field.key] || field.key} · {field.value}</span>
+            <button className="button" onClick={() => setFieldDraft(field)}>编辑</button>
+            <button className="button" disabled={busy || !!preview} onClick={() => void run(() =>
+              review({kind: 'profile', key: field.key, value: null}))}>预览删除</button>
+            <button className="button" disabled={busy || !!preview} onClick={() => void run(() => review({
+              kind: grants.includes('profile-' + field.key) ? 'cloud_revoke' : 'cloud_grant', documentId: 'profile-' + field.key
+            }))}>{grants.includes('profile-' + field.key) ? '撤销字段模型授权' : '预览字段模型授权'}</button>
+          </div>)}
+          <form onSubmit={event => {event.preventDefault(); void run(() => review({kind: 'profile', ...fieldDraft}));}}>
+            <label>资料字段名<input value={fieldDraft.key} onChange={event => setFieldDraft({...fieldDraft, key: event.target.value})} /></label>
+            <label>资料值<input value={fieldDraft.value} onChange={event => setFieldDraft({...fieldDraft, value: event.target.value})} /></label>
+            <button className="button" disabled={busy || !!preview || !fieldDraft.key || !fieldDraft.value.trim()}>预览更新资料</button>
+          </form>
         </section>
         <section className="settings-card">
           <h2>资料导入</h2>
@@ -237,11 +292,11 @@ export default function Assistant() {
           {docs.map(doc => <div key={doc.id} className="assistant-doc">
             <strong>{doc.name}</strong><span>{doc.status === 'stale' ? '需要核对来源' : doc.status === 'empty' ? '无可索引内容' : '可检索'}</span>
             <div className="assistant-actions">
-              {!doc.rootId && <button className="button" disabled={busy || !!preview} onClick={() => void run(async () => {
+              {!doc.rootId && doc.kind !== 'todo' && <button className="button" disabled={busy || !!preview} onClick={() => void run(async () => {
                 const detail = await api<Document>(token, '/knowledge/' + doc.id);
                 setDraft({id: doc.id, name: doc.name, text: detail.text || ''});
               })}>编辑笔记</button>}
-              <button className="button" disabled={busy || !!preview} onClick={() => void run(() => review({kind: 'trash', documentId: doc.id}))}>预览移入垃圾文件夹</button>
+              {doc.kind !== 'todo' && <button className="button" disabled={busy || !!preview} onClick={() => void run(() => review({kind: 'trash', documentId: doc.id}))}>预览移入垃圾文件夹</button>}
               <button className="button" disabled={busy || !!preview} onClick={() => void run(() => review({
                 kind: grants.includes(doc.id) ? 'cloud_revoke' : 'cloud_grant', documentId: doc.id
               }))}>{grants.includes(doc.id) ? '撤销资料模型授权' : '预览资料模型授权'}</button>
@@ -265,9 +320,19 @@ export default function Assistant() {
           <p>{({
             grant_root: '授权本机读取范围', remove_root: '撤销本机读取范围', cloud_grant: '允许配置的模型处理该资料命中的片段',
             cloud_revoke: '撤销云端处理授权', import: '保存副本、解析内容、检索索引与操作回执',
-            note: '保存笔记版本、检索索引与操作回执', trash: '移动知识库副本并移出检索范围'
+            note: '保存笔记版本、检索索引与操作回执', trash: '移动知识库副本并移出检索范围',
+            accept_todo: '保留为待办并将以下来源纳入知识库', admit_todos: '纳入以下未完成待办的来源消息及索引',
+            profile: '更新填表共用的个人资料，受影响的计划会重新准备'
           } as Record<string, string>)[preview.details.kind]}</p>
           <p>{preview.details.path || preview.details.label || preview.details.name}</p>
+          {preview.details.key && <div className="assistant-turn">
+            <strong>{profileLabels[preview.details.key] || preview.details.key}</strong>
+            <p>原值 · {preview.details.before ?? '无'}</p><p>拟更新 · {preview.details.value ?? '删除'}</p>
+          </div>}
+          {preview.details.items?.map(item => <article key={item.id} className="assistant-turn">
+            <strong>{item.title}</strong>
+            {item.messages.map(source => <p key={source.id} className="assistant-text">来源 #{source.id} · {source.text || '无正文'}</p>)}
+          </article>)}
           {preview.details.blob && <p>副本 · {preview.details.blob}</p>}
           {preview.details.target && <p>目标 · {preview.details.target}</p>}
           {preview.details.rows?.map(row => <article key={row.target} className="assistant-turn">
@@ -283,6 +348,7 @@ export default function Assistant() {
               });
               setPreview(undefined);
               setReference(undefined);
+              if (preview.details.kind === 'accept_todo') onCandidateDone?.();
               if (result.state === 'committed') {
                 await refresh(token, docOffset);
                 setNotice('变更已保存。');

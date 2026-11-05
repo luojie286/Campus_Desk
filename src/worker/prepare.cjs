@@ -4,6 +4,7 @@ const {buildGeneralPlan,digest}=require('../core.cjs');
 const {prepareColumnAnalysis}=require('../llm.cjs');
 const {resolveIdentity,resolveNewRowIdentity}=require('../documents/identity.cjs');
 const {loginRequired}=require('../documents/login.cjs');
+const profiles=require('../documents/profile.cjs');
 
 function questionsFromMissing(missing){
   const seen=new Set(),questions=[];
@@ -46,10 +47,9 @@ async function processNextPrepareJob({
     if(task.state!=='preparing')throw Error('task_not_preparing');
 
     // 任务级回答覆盖本地资料，但只覆盖已经存在的字段 key。
-    const profile={...fields()};
-    for(const answer of tasks.latestAnswers({taskId:task.id})){
-      if(Object.prototype.hasOwnProperty.call(profile,answer.key))profile[answer.key]=answer.value;
-    }
+    const values=fields();
+    const answers=tasks.latestAnswers({taskId:task.id});
+    const profile=profiles.effective(values,answers);
 
     const sheet=createSheet(config);
     try{
@@ -78,6 +78,8 @@ async function processNextPrepareJob({
         fields:profile
       });
       const storedPlan={...plan,confidence:analysis.confidence,notes:analysis.notes,document:task.target_ref};
+      storedPlan.profileFingerprint=profiles.fingerprint(storedPlan,values,answers);
+      if(!profiles.planCurrent(storedPlan,fields(),tasks.latestAnswers({taskId:task.id}),true))throw Error('profile_changed');
       const saved=tasks.savePlan({
         taskId:task.id,
         plan:storedPlan,

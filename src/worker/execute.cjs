@@ -47,20 +47,22 @@ async function processNextExecuteJob({
       return {processed:true,jobId:job.id,error:'document_busy'};
     }
     locked=true;
-    operation=tasks.beginOperation({operationId:operation.id,now});
-    const planRow=tasks.currentPlan({taskId:task.id,accountRef});
-    if(!planRow||Number(planRow.id)!==Number(operation.plan_id))throw Error('plan_not_current');
-    const plan=JSON.parse(planRow.plan_json);
-    task=tasks.transition({id:task.id,accountRef,event:'dispatch',now});
+    const execution=tasks.dispatchApproved({taskId,accountRef,operationId,fields,now});
+    if(!execution){
+      jobs.complete(job.id,now);
+      return {processed:true,jobId:job.id,skipped:true,state:tasks.get({id:taskId,accountRef})?.state};
+    }
+    const {plan,profile}=execution;
+    task=tasks.get({id:taskId,accountRef});
 
     sheet=createSheet(config);
     await sheet.open(task.target_ref);
     if(await loginRequired(sheet))throw Error('login_required');
     const grid=await sheet.readUsedRange();
     // 写入前再次核对身份和目标单元格，防止审批后表格被别人改动。
-    assertWritePreconditions(plan,grid,fields());
+    assertWritePreconditions(plan,grid,profile);
     writeAttempted=true;
-    await sheet.applyGeneral(plan,fields());
+    await sheet.applyGeneral(plan,profile);
     task=tasks.transition({id:task.id,accountRef,event:'verify',now});
     if(!await sheet.verifyGeneral(plan)){
       task=tasks.transition({id:task.id,accountRef,event:'unknown',now});

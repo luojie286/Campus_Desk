@@ -5,6 +5,7 @@
 const fs = require('node:fs');
 const { openStore } = require('../src/core.cjs');
 const { TencentSheet, column } = require('../src/tencent.cjs');
+const profiles = require('../src/documents/profile.cjs');
 
 async function main() {
   // 写入是不可逆的外部操作，必须显式带上 --yes 才执行。
@@ -12,6 +13,7 @@ async function main() {
   const config = JSON.parse(fs.readFileSync('.private/config.json', 'utf8'));
   const store = openStore('.private/poc.sqlite');
   const profile = store.profile();
+  const fields = store.fields();
   const sheet = new TencentSheet(config);
   let runId = null;
   try {
@@ -27,6 +29,7 @@ async function main() {
       return;
     }
     if (!await sheet.isEditable()) throw Error('document_read_only_or_login_required');
+    plan.profileFingerprint = profiles.fingerprint(plan, fields);
 
     // 直接以 prepared 状态入库，避免后台 serve 每两秒的 drain 抢到同一记录；
     // 后台只处理 received 状态。
@@ -37,7 +40,7 @@ async function main() {
     ).run(sourceKey, config.allowed_document, JSON.stringify(plan), now);
     runId = Number(inserted.lastInsertRowid);
 
-    store.update(runId, 'writing', plan);
+    profiles.beginLegacyWrite(store.db, runId, plan, 'prepared');
     await sheet.apply(plan, profile);
     if (!await sheet.verify(profile)) throw Error('readback_mismatch');
     store.update(runId, 'completed', plan);

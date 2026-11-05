@@ -32,6 +32,7 @@ const {createV2Handler}=require('./api/v2.cjs');
 const {createBriefingRepository}=require('./briefings/repository.cjs');
 const {processBriefing}=require('./briefings/worker.cjs');
 const {PREFIX:assistantPrefix,startAssistant}=require('./assistant/api.cjs');
+const profiles=require('./documents/profile.cjs');
 fs.mkdirSync('.private',{recursive:true});
 const configPath='.private/config.json';
 if(!fs.existsSync(configPath)){
@@ -83,6 +84,8 @@ async function prepareGeneralRun(run){
     const analysis=await analyzeColumns({payload,config});
     const plan=buildGeneralPlan({grid,identity,headerRow,mappings:analysis.mappings,fields});
     const storedPlan={...plan,confidence:analysis.confidence,notes:analysis.notes,document:run.url};
+    storedPlan.profileFingerprint=profiles.fingerprint(storedPlan,fields);
+    if(!profiles.planCurrent(storedPlan,store.fields(),[],true))throw Error('profile_changed');
     if(!plan.changes.length&&!plan.missing.length){store.update(run.id,'completed',storedPlan);return;}
     store.update(run.id,'awaiting_approval',storedPlan);
   }catch(error){
@@ -127,7 +130,7 @@ async function approveRun(run,expectedDigest){
     // 先读整表核对身份和目标原值；这一步失败时还没有写入，可保留待审批状态。
     const grid=await sheet.readUsedRange();
     assertWritePreconditions(plan,grid,profile);
-    store.update(run.id,'writing',plan);
+    profiles.beginLegacyWrite(store.db,run.id,plan);
     await sheet.applyGeneral(plan,profile);
     if(!await sheet.verifyGeneral(plan))throw Error('readback_mismatch');
     store.update(run.id,'completed',plan);
@@ -137,7 +140,9 @@ async function approveRun(run,expectedDigest){
   }catch(error){
     const current=store.get(run.id);
     if(current&&current.state==='writing')store.update(run.id,'outcome_unknown',null,String(error.message).split('\n')[0].slice(0,160));
-    else store.update(run.id,'awaiting_approval',plan,String(error.message).split('\n')[0].slice(0,160));
+    else if(error.message==='profile_changed'){
+      if(current?.state==='awaiting_approval')store.update(run.id,'received',null,'profile_changed');
+    }else if(current?.state==='awaiting_approval')store.update(run.id,'awaiting_approval',plan,String(error.message).split('\n')[0].slice(0,160));
     throw error;
   }finally{await sheet.close();}
 }
@@ -468,9 +473,10 @@ async function main(){
       if(!plan.changes.length){console.log(JSON.stringify({stage:'no_changes'}));return;}
       // 公式起始值需要单独处理，当前不自动写入。
       if(plan.warnings.length)throw Error('plan_has_warnings');
+      plan.profileFingerprint=profiles.fingerprint(plan,fields);
       runId=startManualRun(target,plan);
-      store.update(runId,'writing',plan);
-      await sheet.applyGeneral(plan,profile);
+      profiles.beginLegacyWrite(store.db,runId,plan,'prepared');
+      await sheet.applyGeneral(plan,fields);
       if(!await sheet.verifyGeneral(plan))throw Error('readback_mismatch');
       store.update(runId,'completed',plan);
       if(plan.identityMode==='reserved')store.clearReservation(target,plan.identityRow);
@@ -615,7 +621,7 @@ async function main(){
           }catch(error){
             const message=String(error.message).split('\n')[0];
             const status=(message==='execute_disabled'||message==='account_mismatch')?403:
-              ['busy','not_awaiting_approval','approval_digest_mismatch','plan_has_warnings','no_changes_to_write','identity_changed','target_changed'].includes(message)?409:500;
+              ['busy','not_awaiting_approval','approval_digest_mismatch','plan_has_warnings','no_changes_to_write','identity_changed','target_changed','profile_changed'].includes(message)?409:500;
             return respond(status,{error:message});
           }finally{busy=false;}
         }

@@ -46,7 +46,7 @@ async function fixture(t, { externalTrash = false } = {}) {
   const model = { id: 'fixture', label: '合成模型', model: 'deepseek-chat', credential: 'DEEPSEEK_API_KEY',
     endpoint: 'https://api.deepseek.com/chat/completions', output: 256, timeout: 30000 };
   const config = { db, owner: 'fixture-account', storage: fs.realpathSync(storage), trashRoot,
-    languagePath: path.resolve('.private/ocr'), token, models: [model], port, profileFixture: true };
+    languagePath: path.resolve('.private/ocr'), token, models: [model], port };
   const previous = process.env.LAB1_ASSISTANT_MOCK_TOKEN;
   process.env.LAB1_ASSISTANT_MOCK_TOKEN = 'fixture';
   if (!live) {
@@ -166,13 +166,14 @@ test('M1 A04 A05 A08: note and profile changes, trash preserves original, scope 
   fs.symlinkSync(f.folder, path.join(f.source, 'escape'), 'junction');
   assert.equal((await f.request('/previews', { kind: 'import', rootId: f.root, names: ['escape/outside.md'] }, 403)).code, 'outside_scope');
   const add = await f.preview({ kind: 'profile', key: 'fixture_field', value: '甲' });
-  assert.equal((await f.request('/fixture-fields/fixture_field')).value, null);
+  const value = async () => (await f.request('/profile')).items.find(field => field.key === 'fixture_field')?.value ?? null;
+  assert.equal(await value(), null);
   await f.decide(add);
-  assert.equal((await f.request('/fixture-fields/fixture_field')).value, '甲');
+  assert.equal(await value(), '甲');
   await f.approve({ kind: 'profile', key: 'fixture_field', value: '乙' });
-  assert.equal((await f.request('/fixture-fields/fixture_field')).value, '乙');
+  assert.equal(await value(), '乙');
   await f.approve({ kind: 'profile', key: 'fixture_field', value: null });
-  assert.equal((await f.request('/fixture-fields/fixture_field')).value, null);
+  assert.equal(await value(), null);
 
   await f.approve({ kind: 'note', name: 'note.txt', text: '编辑前文本' });
   const note = (await f.request('/knowledge')).items.find(item => item.name === 'note.txt');
@@ -270,6 +271,12 @@ test('M1 desktop: import approval and local citation from the built workbench',
   { skip: process.env.LAB1_ASSISTANT_BROWSER_FIXTURE !== '1', timeout: 45000 }, async t => {
     const f = await fixture(t);
     fs.writeFileSync(path.join(f.source, '本机验收.md'), '信号标记 8136');
+    const messages = require('../src/db/repositories/messages.cjs').createMessageRepository(f.db);
+    const suggestions = require('../src/db/repositories/suggestions.cjs').createSuggestionRepository(f.db);
+    const raw = messages.insert({ platform: 'qq', adapterInstance: 'fixture', accountRef: 'fixture-account',
+      conversationType: 'private', conversationId: '101', senderId: '101', sourceMessageId: 'm2-ui',
+      kind: 'text', contentText: '取样地点 7351', receivedAt: new Date().toISOString() });
+    suggestions.accept({ id: suggestions.insert({ messageId: raw.id, title: '取样验收待办' }), accountRef: 'fixture-account' });
     const dist = path.resolve('desktop/dist');
     const server = http.createServer((req, res) => {
       const url = new URL(req.url, 'http://127.0.0.1');
@@ -310,4 +317,128 @@ test('M1 desktop: import approval and local citation from the built workbench',
     await page.getByRole('button', { name: '提问', exact: true }).click();
     await page.getByRole('button', { name: '本机验收.md · 第 1 行', exact: true }).click();
     await page.getByText('信号标记 8136', { exact: true }).waitFor();
+    await page.getByLabel('取样验收待办 · 已纳入 0 条来源').check();
+    await page.getByRole('button', { name: '预览批量纳入' }).click();
+    await dialog.getByText(/取样地点 7351/).waitFor();
+    await dialog.getByRole('button', { name: '批准', exact: true }).click();
+    await page.getByText('取样验收待办 · 已纳入 1 条来源', { exact: true }).waitFor();
+    await page.getByLabel('资料字段名').fill('major');
+    await page.getByLabel('资料值').fill('合成专业');
+    await page.getByRole('button', { name: '预览更新资料' }).click();
+    await dialog.getByText('拟更新 · 合成专业', { exact: true }).waitFor();
+    await dialog.getByRole('button', { name: '批准', exact: true }).click();
+    await page.getByText('专业 · 合成专业', { exact: true }).waitFor();
   });
+
+test('M2 A06: combined approval and batch admission follow the live todo lifecycle', async t => {
+  const f = await fixture(t);
+  const messages = require('../src/db/repositories/messages.cjs').createMessageRepository(f.db);
+  const suggestions = require('../src/db/repositories/suggestions.cjs').createSuggestionRepository(f.db);
+  const owner = 'fixture-account';
+  function message(sourceMessageId, contentText, accountRef = owner) {
+    return messages.insert({ platform: 'qq', adapterInstance: 'fixture', accountRef,
+      conversationType: 'private', conversationId: '101', senderId: '101', sourceMessageId,
+      kind: 'text', contentText, receivedAt: new Date().toISOString() }).id;
+  }
+  const raw = message('m2-current', '海蓝色样品 4481');
+  const other = message('m2-foreign', '异账号样品 6254', 'foreign');
+  message('m2-chatter', '随意闲聊 7428');
+  const suspect = suggestions.insert({ messageId: raw, messageIds: [other], title: '混合账号' });
+  await f.request('/previews', { kind: 'accept_todo', suggestionId: suspect }, 403);
+  const candidate = suggestions.insert({ messageId: raw, title: '提交样品' });
+  assert.equal((await f.ask('4481')).status, 'no_evidence');
+  const rejected = await f.preview({ kind: 'accept_todo', suggestionId: candidate });
+  assert.equal((await f.request('/todos')).items.length, 0);
+  await f.decide(rejected, 'reject');
+  assert.equal(suggestions.get({ id: candidate, accountRef: owner }).status, 'pending');
+  const combined = await f.preview({ kind: 'accept_todo', suggestionId: candidate });
+  const receipt = 'combined-m2';
+  const result = await f.decide(combined, 'approve', receipt);
+  assert.equal(result.admitted, 1);
+  assert.deepEqual(await f.decide(combined, 'approve', receipt), result);
+  const [id] = result.todoIds;
+  assert.equal((await f.request('/todos')).items.length, 1);
+  const source = (await f.ask('4481')).evidence[0];
+  assert.match((await f.request('/evidence/' + source.id)).quote, /4481/);
+  const existing = suggestions.accept({ id: suggestions.insert({ messageId: raw, title: '复核样品' }), accountRef: owner }).todo;
+  const second = suggestions.accept({ id: suggestions.insert({ messageId: message('m2-second', '记录仓位 9942'), title: '记录仓位' }), accountRef: owner }).todo;
+  assert.equal((await f.ask('9942')).status, 'no_evidence');
+  assert.ok((await f.ask('还有什么待办')).evidence.some(item => item.id === 'todo-' + second.id));
+  assert.equal((await f.approve({ kind: 'admit_todos', todoIds: [existing.id, second.id] })).admitted, 2);
+  suggestions.updateTodo({ id, accountRef: owner, action: 'complete' });
+  assert.equal((await f.ask('4481')).evidence[0].id, source.id);
+  suggestions.updateTodo({ id: existing.id, accountRef: owner, action: 'delete' });
+  assert.equal((await f.ask('4481')).status, 'no_evidence');
+  await f.request('/evidence/' + source.id, undefined, 404);
+  assert.equal((await f.ask('还有什么待办')).evidence.some(item => item.id === 'todo-' + id), false);
+  suggestions.updateTodo({ id, accountRef: owner, action: 'reopen' });
+  assert.equal((await f.ask('4481')).evidence[0].id, source.id);
+  assert.equal((await f.ask('7428')).status, 'no_evidence');
+  assert.ok(messages.get({ id: raw, accountRef: owner }));
+});
+
+test('M2 A07: profile approval invalidates old work and new plans require fresh approval', async t => {
+  const f = await fixture(t);
+  const profiles = require('../src/documents/profile.cjs');
+  const tasks = require('../src/db/repositories/tasks.cjs').createTaskRepository(f.db);
+  const jobs = require('../src/db/repositories/jobs.cjs').createJobRepository(f.db);
+  const { processNextPrepareJob } = require('../src/worker/prepare.cjs');
+  const { processNextExecuteJob } = require('../src/worker/execute.cjs');
+  const owner = 'fixture-account';
+  profiles.saveProfile(f.db, { name: '测试甲', student_id: '0001', age: 20, sex: '示例' });
+  profiles.setField(f.db, 'major', '旧专业');
+  const task = tasks.create({ accountRef: owner, targetRef: 'https://docs.qq.com/sheet/synthetic' });
+  jobs.enqueue({ type: 'prepare_task', payload: { taskId: task.id, accountRef: owner } });
+  const grid = [['姓名', '学号', '专业'], ['测试甲', '0001', '']];
+  let writes = 0;
+  const worker = {
+    tasks, jobs, workerId: 'fixture', config: { execute: true },
+    fields: () => profiles.fields(f.db),
+    createSheet: () => ({
+      open: async () => {}, close: async () => {}, readUsedRange: async () => grid,
+      applyGeneral: async plan => {
+        assert.throws(() => profiles.setField(f.db, 'major', '竞争更新'), /profile_busy/);
+        writes++;
+        grid[1][2] = plan.changes[0].value;
+      },
+      verifyGeneral: async () => true
+    }),
+    analyze: async () => ({ mappings: [{ column: 3, field: 'major' }], confidence: 1, notes: [] })
+  };
+  function approve(plan) {
+    const result = tasks.approve({ taskId: task.id, accountRef: owner, planId: plan.id, planVersion: plan.version,
+      planDigest: plan.digest, clientRequestId: randomUUID() });
+    jobs.enqueue({ type: 'execute_operation', payload: { taskId: task.id, accountRef: owner, operationId: result.operation.id } });
+    return result.operation;
+  }
+  assert.equal((await processNextPrepareJob(worker)).state, 'awaiting_approval');
+  const old = tasks.currentPlan({ taskId: task.id, accountRef: owner });
+  assert.equal(JSON.parse(old.plan_json).changes[0].value, '旧专业');
+  const pending = await f.preview({ kind: 'profile', key: 'major', value: '新专业' });
+  assert.equal(profiles.fields(f.db).major, '旧专业');
+  const oldOp = approve(old);
+  assert.equal((await f.decide(pending)).state, 'committed');
+  assert.equal(tasks.getOperation({ id: oldOp.id, taskId: task.id }).error_class, 'profile_changed');
+  assert.throws(() => approve(old), /plan_not_current/);
+  assert.equal((await processNextPrepareJob(worker)).state, 'awaiting_approval');
+  const fresh = tasks.currentPlan({ taskId: task.id, accountRef: owner });
+  assert.equal(JSON.parse(fresh.plan_json).changes[0].value, '新专业');
+  assert.notEqual(fresh.digest, old.digest);
+  approve(fresh);
+  // 新计划已经批准时，排在前面的旧执行任务仍须被跳过。
+  assert.equal((await processNextExecuteJob(worker)).skipped, true);
+  assert.equal(writes, 0);
+  assert.equal((await processNextExecuteJob(worker)).state, 'completed');
+  assert.equal(grid[1][2], '新专业');
+  assert.equal(writes, 1);
+  await f.approve({ kind: 'profile', key: 'sex', value: null });
+  assert.equal(Object.hasOwn(profiles.fields(f.db), 'sex'), false);
+  assert.equal(f.db.prepare('SELECT sex FROM profile WHERE id=1').get().sex, '示例');
+  const legacy = tasks.create({ accountRef: owner, targetRef: 'https://docs.qq.com/sheet/oldplan' });
+  tasks.transition({ id: legacy.id, accountRef: owner, event: 'start' });
+  const unversioned = tasks.savePlan({ taskId: legacy.id, plan: { changes: [] }, digest: 'fixture-legacy-digest' });
+  tasks.transition({ id: legacy.id, accountRef: owner, event: 'ready_for_approval' });
+  assert.throws(() => tasks.approve({ taskId: legacy.id, accountRef: owner, planId: unversioned.id, planVersion: unversioned.version,
+    planDigest: unversioned.digest, clientRequestId: randomUUID() }), /profile_changed/);
+  assert.equal(tasks.get({ id: legacy.id, accountRef: owner }).state, 'preparing');
+});

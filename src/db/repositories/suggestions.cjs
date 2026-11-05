@@ -92,7 +92,8 @@ function createSuggestionRepository(db){
         ORDER BY m.id`).all(Number(suggestionId),String(accountRef));
     },
     accept({id,accountRef,deviceId=null,createdAt=new Date().toISOString()}){
-      db.exec('BEGIN IMMEDIATE');
+      const ownTransaction=!db.isTransaction;
+      if(ownTransaction)db.exec('BEGIN IMMEDIATE');
       try{
         const row=joined(id,accountRef);
         if(!row)throw Error('suggestion_not_found');
@@ -107,13 +108,13 @@ function createSuggestionRepository(db){
         }
         db.prepare("UPDATE suggestions SET status='accepted',decided_at=?,decided_device_id=? WHERE id=?")
           .run(createdAt,deviceId,Number(id));
-        db.exec('COMMIT');
+        if(ownTransaction)db.exec('COMMIT');
         return {
           suggestion:joined(id,accountRef),
           todo:db.prepare('SELECT * FROM todos WHERE id=?').get(todoId)
         };
       }catch(error){
-        db.exec('ROLLBACK');
+        if(ownTransaction)db.exec('ROLLBACK');
         throw error;
       }
     },

@@ -3,6 +3,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { fork } = require('node:child_process');
 const { MAX_BYTES, hash, fail, relativeName, within, checkedAbsolute, resolveSource, readFile, checkFormat, publish } = require('./files.cjs');
+const profiles = require('../documents/profile.cjs');
+const { createTodoKnowledge, liveAdmission } = require('./todos.cjs');
 
 function transaction(db, work) {
   db.exec('BEGIN IMMEDIATE');
@@ -29,13 +31,16 @@ function initialize(db) {
     'CREATE TABLE IF NOT EXISTS kb_grants(owner TEXT NOT NULL, target TEXT NOT NULL, PRIMARY KEY(owner,target));' +
     'CREATE TABLE IF NOT EXISTS assistant_operations(owner TEXT NOT NULL, id TEXT NOT NULL, preview TEXT NOT NULL, digest TEXT NOT NULL,' +
     ' state TEXT NOT NULL, work TEXT, result TEXT, PRIMARY KEY(owner,id), UNIQUE(owner,preview));' +
-    'INSERT OR IGNORE INTO kb_schema VALUES(1);'
+    'CREATE TABLE IF NOT EXISTS profile_deleted_fields(key TEXT PRIMARY KEY);' +
+    'CREATE TABLE IF NOT EXISTS kb_todo_sources(rev TEXT PRIMARY KEY, message INTEGER NOT NULL, body TEXT NOT NULL);' +
+    'CREATE TABLE IF NOT EXISTS kb_todo_admissions(todo INTEGER NOT NULL, rev TEXT NOT NULL, PRIMARY KEY(todo,rev));' +
+    'CREATE INDEX IF NOT EXISTS kb_admissions_revision ON kb_todo_admissions(rev);' +
+    'INSERT OR IGNORE INTO kb_schema VALUES(1),(2);'
   ));
 }
 
 function ready(db) {
-  return !!db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='kb_schema'").get() &&
-    !!db.prepare('SELECT version FROM kb_schema WHERE version=1').get();
+  return profiles.enabled(db);
 }
 
 function terms(body) {
@@ -106,8 +111,9 @@ function parser(name, bytes, languagePath) {
   });
 }
 
-function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.join(storage, 'trash'), profileFixture = false }) {
+function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.join(storage, 'trash') }) {
   if (!ready(db)) fail('assistant_unavailable', 503);
+  const todos = createTodoKnowledge(db, owner);
   const previews = new Map();
   let parsing = false;
   const rootById = db.prepare('SELECT * FROM kb_roots WHERE owner=? AND id=?');
@@ -141,6 +147,7 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
   }
 
   function localFresh(doc) {
+    if (doc.blob === '') return todos.live(doc.id);
     try {
       const blob = blobPath(doc.blob);
       if (checkedAbsolute(blob) !== blob || readFile(blob).digest !== doc.digest) return false;
@@ -159,11 +166,33 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
   function summarize(document) {
     const indexed = db.prepare('SELECT 1 FROM kb_chunks WHERE rev=? LIMIT 1').get(document.rev);
     const status = localFresh(document) ? (indexed ? 'active' : 'empty') : 'stale';
-    return { id: document.id, name: document.name, revision: document.rev, rootId: document.root, status };
+    return { id: document.id, name: document.name, revision: document.rev, rootId: document.root, status, kind: document.blob === '' ? 'todo' : 'file' };
+  }
+
+  const fieldLabels = { name: '姓名', student_id: '学号', sex: '性别', age: '年龄', major: '专业', phone: '电话', email: '邮箱' };
+  function profileEvidence(key) {
+    if (!profiles.validKey(key)) fail('not_found', 404);
+    const values = profiles.fields(db);
+    if (!Object.hasOwn(values, key)) fail('not_found', 404);
+    const label = Object.hasOwn(fieldLabels, key) ? fieldLabels[key] : key;
+    const quote = label + ' · ' + values[key];
+    return { id: 'profile-' + key, documentId: 'profile-' + key, revision: hash(quote), locator: label, quote, title: '个人资料' };
+  }
+  function grantLabel(target) {
+    if (target.startsWith('profile-')) return profileEvidence(target.slice(8)).locator;
+    if (/^todo-\d+$/.test(target)) return todos.evidence(Number(target.slice(5))).quote;
+    return documentOrFail(target).name;
+  }
+  function indexChunks(rev, entries) {
+    for (const chunk of entries) {
+      const result = db.prepare('INSERT INTO kb_chunks(rev,locator,body) VALUES(?,?,?)').run(rev, chunk.locator, chunk.text);
+      db.prepare('INSERT INTO kb_fts(rowid,terms) VALUES(?,?)').run(result.lastInsertRowid, terms(chunk.text).join(' '));
+    }
   }
 
   async function makePlan(input) {
     const { kind } = input;
+    if (kind === 'accept_todo' || kind === 'admit_todos') return todos.plan(input);
     if (kind === 'grant_root') {
       const root = checkedAbsolute(input.path);
       const stat = fs.statSync(root);
@@ -173,8 +202,10 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
       return { kind, id: randomUUID(), path: root, rootKind: stat.isDirectory() ? 'directory' : 'file' };
     }
     if (kind === 'cloud_grant' || kind === 'cloud_revoke') {
-      const resource = input.rootId ? rootOrFail(input.rootId) : documentOrFail(input.documentId);
-      return { kind, target: resource.id, label: resource.path || resource.name };
+      const target = input.rootId || input.documentId;
+      if (typeof target !== 'string') fail('invalid_input');
+      const label = input.rootId ? rootOrFail(target).path : grantLabel(target);
+      return { kind, target, label };
     }
     if (kind === 'remove_root') {
       const root = rootOrFail(input.rootId);
@@ -182,21 +213,22 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
     }
     if (kind === 'trash') {
       const doc = documentOrFail(input.documentId);
+      if (!doc.blob) fail('outside_scope', 403);
       return { kind, document: doc.id, previous: doc.rev, blob: doc.blob, digest: doc.digest,
         name: doc.name, trashRoot, target: 'trash/' + randomUUID() + path.extname(doc.name) };
     }
-    if (kind === 'profile' && profileFixture) {
-      if (typeof input.key !== 'string' || !/^[a-z][a-z0-9_]{0,49}$/.test(input.key) ||
-          (input.value !== null && (typeof input.value !== 'string' || input.value.length > 1000))) fail('invalid_input');
-      const current = db.prepare('SELECT value FROM profile_fields WHERE key=?').get(input.key);
-      return { kind, key: input.key, before: current?.value ?? null, value: input.value };
+    if (kind === 'profile') {
+      if (!profiles.validKey(input.key) ||
+          (input.value !== null && (typeof input.value !== 'string' || !input.value.trim() || input.value.length > 1000))) fail('invalid_input');
+      if (input.key === 'age' && input.value !== null && !/^\d{1,3}$/.test(input.value)) fail('invalid_input');
+      return { kind, key: input.key, before: profiles.fields(db)[input.key] ?? null, value: input.value };
     }
     if (kind === 'note') {
       const name = relativeName(input.name);
       if (name.includes('/') || !['.md', '.txt'].includes(path.extname(name).toLowerCase()) ||
           typeof input.text !== 'string' || Buffer.byteLength(input.text) > 1024 * 1024) fail('invalid_input');
       const previous = input.documentId ? documentOrFail(input.documentId) : null;
-      if (previous?.root) fail('outside_scope', 403);
+      if (previous && (previous.root || !previous.blob)) fail('outside_scope', 403);
       const rev = randomUUID();
       return { kind, rows: [{ id: previous?.id || randomUUID(), previous: previous?.rev ?? null, before: previous?.digest ?? null,
         beforeText: previous ? readFile(blobPath(previous.blob)).bytes.toString('utf8') : undefined,
@@ -260,7 +292,8 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
   function precheck(plan) {
     if (checkedAbsolute(storage) !== storage) fail('outside_scope', 403);
     if (plan.kind === 'grant_root' && checkedAbsolute(plan.path) !== plan.path) fail('preview_changed', 409);
-    if (plan.kind === 'cloud_grant' && !getRoot(plan.target) && !getDoc(plan.target)) fail('outside_scope', 403);
+    if (plan.kind === 'cloud_grant' && !getRoot(plan.target)) grantLabel(plan.target);
+    if (plan.kind === 'accept_todo' || plan.kind === 'admit_todos') todos.check(plan);
     if (plan.rows) {
       const verified = [];
       for (const row of plan.rows) {
@@ -284,8 +317,7 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
       if (checkedAbsolute(location) !== location || readFile(location).digest !== plan.digest) fail('preview_changed', 409);
     }
     if (plan.kind === 'profile') {
-      const current = db.prepare('SELECT value FROM profile_fields WHERE key=?').get(plan.key);
-      if ((current?.value ?? null) !== plan.before) fail('preview_changed', 409);
+      if ((profiles.fields(db)[plan.key] ?? null) !== plan.before) fail('preview_changed', 409);
     }
     return [];
   }
@@ -314,7 +346,9 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
     }
     return transaction(db, () => {
       let result = { id: opId, state: 'committed', kind: plan.kind };
-      if (plan.kind === 'grant_root') {
+      if (plan.kind === 'accept_todo' || plan.kind === 'admit_todos') {
+        Object.assign(result, todos.apply(plan, (rev, text, locator) => indexChunks(rev, chunks([{ text, locator }], false))));
+      } else if (plan.kind === 'grant_root') {
         db.prepare('INSERT OR IGNORE INTO kb_roots VALUES(?,?,?,?)').run(plan.id, owner, plan.path, plan.rootKind);
         result.rootId = db.prepare('SELECT id FROM kb_roots WHERE owner=? AND path=?').get(owner, plan.path).id;
       } else if (plan.kind === 'remove_root') {
@@ -325,8 +359,8 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
       } else if (plan.kind === 'cloud_revoke') {
         db.prepare('DELETE FROM kb_grants WHERE owner=? AND target=?').run(owner, plan.target);
       } else if (plan.kind === 'profile') {
-        if (plan.value === null) db.prepare('DELETE FROM profile_fields WHERE key=?').run(plan.key);
-        else db.prepare('INSERT OR REPLACE INTO profile_fields VALUES(?,?,?,?)').run(plan.key, plan.value, 'fixture', new Date().toISOString());
+        if ((profiles.fields(db)[plan.key] ?? null) !== plan.before) fail('preview_changed', 409);
+        profiles.setField(db, plan.key, plan.value, 'assistant');
       } else if (plan.kind === 'trash') {
         db.prepare("UPDATE kb_documents SET state='trash' WHERE owner=? AND id=?").run(owner, plan.document);
         result.target = blobPath(plan.target);
@@ -338,10 +372,7 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
           db.prepare('INSERT INTO kb_revisions VALUES(?,?,?,?)').run(row.rev, row.id, row.digest, row.blob);
           if (row.previous) db.prepare('UPDATE kb_documents SET rev=?,name=? WHERE owner=? AND id=?').run(row.rev, row.name, owner, row.id);
           else db.prepare("INSERT INTO kb_documents VALUES(?,?,?,?,?,'active')").run(row.id, owner, row.root, row.name, row.rev);
-          for (const chunk of row.chunks) {
-            const inserted = db.prepare('INSERT INTO kb_chunks(rev,locator,body) VALUES(?,?,?)').run(row.rev, chunk.locator, chunk.text);
-            db.prepare('INSERT INTO kb_fts(rowid,terms) VALUES(?,?)').run(inserted.lastInsertRowid, terms(chunk.text).join(' '));
-          }
+          indexChunks(row.rev, row.chunks);
           result.imported++;
         }
       }
@@ -394,6 +425,8 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
 
   const evidenceQuery = db.prepare('SELECT c.*,d.id AS doc FROM kb_chunks c JOIN kb_documents d ON d.rev=c.rev WHERE d.owner=? AND c.id=?');
   function getEvidence(id) {
+    if (/^todo-\d+$/.test(id)) return todos.evidence(Number(id.slice(5)));
+    if (typeof id === 'string' && id.startsWith('profile-')) return profileEvidence(id.slice(8));
     if (!/^\d+$/.test(String(id))) fail('not_found', 404);
     const row = evidenceQuery.get(owner, Number(id));
     const item = row && evidence(row);
@@ -402,12 +435,25 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
   }
 
   function search(query, selected) {
+    if (!selected?.length && /待办|\btodos?\b/i.test(query)) {
+      const titles = todos.list().map(item => todos.evidence(item.id));
+      return [...titles, ...todos.sourceChunks().map(evidence).filter(Boolean).slice(0, 8)];
+    }
+    if (!selected?.length) {
+      const personal = Object.keys(profiles.fields(db)).filter(key => {
+        const label = Object.hasOwn(fieldLabels, key) ? fieldLabels[key] : key;
+        if (query.trim().toLowerCase() === key.toLowerCase() || query.trim() === label) return true;
+        return /我|个人资料|档案/.test(query) && (query.includes(label) || /个人资料|档案/.test(query));
+      }).slice(0, 20);
+      if (personal.length) return personal.map(profileEvidence);
+    }
     const cleaned = query.replace(/请问|帮我|告诉我|解释一下|请解释|是什么|有哪些|怎么|如何|介绍一下|请|一下|吗|什么|请介绍/g, ' ');
     const keywords = [...new Set(terms(cleaned))].filter(term => !['what','is','the','a','an','how','can','i','do','please','explain'].includes(term)).slice(0, 32);
     if (!keywords.length) return [];
     const found = db.prepare(
       "SELECT c.*,d.id AS doc FROM kb_fts JOIN kb_chunks c ON c.id=kb_fts.rowid JOIN kb_documents d ON d.rev=c.rev " +
-      "WHERE kb_fts MATCH ? AND d.owner=? AND d.state='active' ORDER BY bm25(kb_fts),c.id LIMIT 96"
+      "JOIN kb_revisions r ON r.id=d.rev WHERE kb_fts MATCH ? AND d.owner=? AND d.state='active' AND (r.blob<>'' OR " +
+      liveAdmission + ") ORDER BY bm25(kb_fts),c.id LIMIT 96"
     ).all(keywords.map(term => '"' + term + '"').join(' OR '), owner);
     const result = [];
     const counts = new Map();
@@ -427,6 +473,10 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
   }
 
   function cloudAllowed(item) {
+    if (/^(todo-\d+|profile-)/.test(item.id)) {
+      try { return !!checkGrant.get(owner, item.documentId) && getEvidence(item.id).revision === item.revision; }
+      catch { return false; }
+    }
     const doc = getDoc(item.documentId);
     return !!doc && doc.rev === item.revision && localFresh(doc) &&
       (!!checkGrant.get(owner, doc.id) || (!!doc.root && !!checkGrant.get(owner, doc.root)));
@@ -449,16 +499,19 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
 
   return {
     preview, decide, search, getEvidence, cloudAllowed, entries,
+    todos: todos.list,
+    profile: () => Object.entries(profiles.fields(db)).map(([key, value]) => ({ key, value })),
     getPreview(id) { purgePreviews(); const receipt = previews.get(id); if (!receipt) fail('not_found', 404); return review(receipt); },
     roots: () => rootList.all(owner),
     documents(offset = 0) {
-      return db.prepare("SELECT d.*,r.digest,r.blob FROM kb_documents d JOIN kb_revisions r ON r.id=d.rev WHERE d.owner=? AND d.state='active' ORDER BY d.name LIMIT 101 OFFSET ?")
+      return db.prepare("SELECT d.*,r.digest,r.blob FROM kb_documents d JOIN kb_revisions r ON r.id=d.rev WHERE d.owner=? AND d.state='active' AND (r.blob<>'' OR " +
+        liveAdmission + ") ORDER BY d.name LIMIT 101 OFFSET ?")
         .all(owner, offset).slice(0, 100).map(summarize);
     },
     document(id) {
       const doc = documentOrFail(id);
       const data = summarize(doc);
-      if (!doc.root && data.status !== 'stale') data.text = readFile(blobPath(doc.blob)).bytes.toString('utf8');
+      if (!doc.root && doc.blob && data.status !== 'stale') data.text = readFile(blobPath(doc.blob)).bytes.toString('utf8');
       return data;
     },
     grants: () => db.prepare('SELECT target FROM kb_grants WHERE owner=? ORDER BY target').all(owner),
@@ -466,10 +519,6 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
       const row = opById.get(owner, id);
       if (!row) fail('not_found', 404);
       return row.result ? JSON.parse(row.result) : { id, state: row.state };
-    },
-    fixtureField(key) {
-      if (!profileFixture) fail('not_found', 404);
-      return db.prepare('SELECT value FROM profile_fields WHERE key=?').get(key)?.value ?? null;
     }
   };
 }

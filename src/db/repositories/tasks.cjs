@@ -1,13 +1,14 @@
 // 任务仓储：正式待办派生文档任务、显式状态转移、问题/回答、计划版本、审批操作和文档锁。
 // 外部浏览器操作不在这里执行；这里只保证数据库状态和幂等约束。
 const {transition}=require('../../tasks/state.cjs');
+const profiles=require('../../documents/profile.cjs');
 
 function createTaskRepository(db){
   const nowIso=()=>new Date().toISOString();
   const getTask=({id,accountRef})=>db.prepare('SELECT * FROM tasks WHERE id=? AND account_ref=?')
     .get(Number(id),String(accountRef))||null;
   const jsonText=value=>value===undefined||value===null?null:(typeof value==='string'?value:JSON.stringify(value));
-  return {
+  const repository = {
     create({todoId=null,requestKey=null,kind='doc_fill',executorType='tencent_sheet',accountRef,targetRef,metadata=null,createdAt=nowIso()}){
       // 文档链接任务没有 todo；用 request_key（账号+消息+文档）去重。
       const existing=requestKey
@@ -207,6 +208,14 @@ function createTaskRepository(db){
         if(!task)throw Error('task_not_found');
         if(!clientRequestId)throw Error('client_request_id_required');
         const key=String(task.id)+':'+String(planId)+':fill';
+        const plan=db.prepare('SELECT * FROM plans WHERE id=? AND task_id=?').get(Number(planId),Number(task.id));
+        if(!plan||plan.status!=='current'||Number(task.current_plan_id)!==Number(plan.id)||
+          String(plan.digest)!==String(planDigest)||Number(plan.version)!==Number(planVersion)){
+          throw Error('plan_not_current');
+        }
+        if(profiles.enabled(db)&&!profiles.planCurrent(JSON.parse(plan.plan_json),profiles.fields(db),repository.latestAnswers({taskId}),true)){
+          throw Error('profile_changed');
+        }
         const existingOperation=db.prepare('SELECT * FROM operations WHERE idempotency_key=?').get(key);
         if(existingOperation){
           const existingApproval=db.prepare('SELECT * FROM approvals WHERE task_id=? AND plan_id=? ORDER BY id DESC LIMIT 1')
@@ -216,10 +225,6 @@ function createTaskRepository(db){
           return {created:false,task:current,approval:existingApproval,operation:existingOperation};
         }
         if(task.state!=='awaiting_approval')throw Error('invalid_transition_'+task.state+'_approve');
-        const plan=db.prepare('SELECT * FROM plans WHERE id=? AND task_id=?').get(Number(planId),Number(task.id));
-        if(!plan||plan.status!=='current'||String(plan.digest)!==String(planDigest)||Number(plan.version)!==Number(planVersion)){
-          throw Error('plan_not_current');
-        }
         const approvalInfo=db.prepare(`INSERT INTO approvals
           (task_id,plan_id,plan_version,plan_digest,decision,actor_device_id,client_request_id,created_at)
           VALUES(?,?,?,?, 'approved',?,?,?)`)
@@ -241,8 +246,28 @@ function createTaskRepository(db){
         return {created:true,task:current,approval,operation};
       }catch(error){
         db.exec('ROLLBACK');
+        if(error.message==='profile_changed')profiles.invalidateTask(db,Number(taskId),Number(planId));
         throw error;
       }
+    },
+    dispatchApproved({ taskId, accountRef, operationId, fields, now }) {
+      return profiles.transaction(db, () => {
+        const task=getTask({id:taskId,accountRef});
+        const operation=repository.getOperation({id:operationId,taskId});
+        const planRow=repository.currentPlan({taskId,accountRef});
+        if(task?.state!=='approved'||operation?.state!=='queued'||!planRow||
+          Number(operation.plan_id)!==Number(planRow.id))return null;
+        const plan=JSON.parse(planRow.plan_json);
+        const values=fields();
+        const answers=repository.latestAnswers({taskId});
+        if(!profiles.planCurrent(plan,values,answers,profiles.enabled(db))){
+          profiles.invalidateTask(db,taskId,planRow.id);
+          return null;
+        }
+        repository.beginOperation({operationId,now});
+        repository.transition({id:taskId,accountRef,event:'dispatch',now});
+        return {plan,profile:profiles.effective(values,answers)};
+      });
     },
     acquireLock({lockKey,ownerId,taskId=null,operationId=null,ttlSeconds=60,now=nowIso()}){
       db.exec('BEGIN IMMEDIATE');
@@ -270,6 +295,7 @@ function createTaskRepository(db){
         .run(String(lockKey),String(ownerId)).changes===1;
     }
   };
+  return repository;
 }
 
 module.exports={createTaskRepository};
