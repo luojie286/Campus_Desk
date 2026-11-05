@@ -17,7 +17,7 @@ const { createAssistant } = require('../src/assistant/api.cjs');
 const token = 'fixture-owner-only-0000000000000000000000000000';
 const live = process.env.LAB1_ASSISTANT_LIVE_FIXTURE === '1';
 
-async function fixture(t, { externalTrash = false } = {}) {
+async function fixture(t, { externalTrash = false, modelReply, liveModel = live, outputLimit = 256 } = {}) {
   const parent = fs.realpathSync(os.tmpdir());
   const folder = fs.mkdtempSync(path.join(parent, 'lab1-assistant-test-'));
   const source = path.join(folder, 'source');
@@ -44,16 +44,20 @@ async function fixture(t, { externalTrash = false } = {}) {
   await once(server, 'listening');
   const port = server.address().port;
   const model = { id: 'fixture', label: '合成模型', model: 'deepseek-chat', credential: 'DEEPSEEK_API_KEY',
-    endpoint: 'https://api.deepseek.com/chat/completions', output: 256, timeout: 30000 };
+    endpoint: 'https://api.deepseek.com/chat/completions', output: outputLimit, timeout: 30000 };
+  const secondModel = { ...model, id: 'fixture-review', model: liveModel ? model.model : 'fixture-review-model' };
   const config = { db, owner: 'fixture-account', storage: fs.realpathSync(storage), trashRoot,
-    languagePath: path.resolve('.private/ocr'), token, models: [model], port };
+    languagePath: path.resolve('.private/ocr'), token, models: [model, secondModel], port };
   const previous = process.env.LAB1_ASSISTANT_MOCK_TOKEN;
   process.env.LAB1_ASSISTANT_MOCK_TOKEN = 'fixture';
-  if (!live) {
+  if (!liveModel) {
     model.credential = 'LAB1_ASSISTANT_MOCK_TOKEN';
+    secondModel.credential = model.credential;
     config.fetchModel = async (_url, options) => {
-      const input = JSON.parse(JSON.parse(options.body).messages[1].content);
+      const payload = JSON.parse(options.body);
+      const input = JSON.parse(payload.messages[1].content);
       calls.push(input);
+      if (modelReply) return modelReply(input, payload, options.signal);
       return Response.json({ choices: [{ message: { content: JSON.stringify({
         answer: '合成结果 4817', citations: [input.evidence[0].id], supplement: ''
       }) } }], usage: { total_tokens: 12 } });
@@ -101,7 +105,8 @@ async function fixture(t, { externalTrash = false } = {}) {
       await request('/sessions/' + session.id + '/close', {});
     }
   };
-  return { folder, source, storage, trashRoot, db, request, root, preview, decide, approve, ask, calls, base: 'http://127.0.0.1:' + port + '/v1/assistant' };
+  return { folder, source, storage, trashRoot, db, request, root, preview, decide, approve, ask, calls,
+    restart: () => { handler = createAssistant(config); }, base: 'http://127.0.0.1:' + port + '/v1/assistant' };
 }
 
 test('M1 A01 A03 A08: 20 questions, preview, versioning and authorization', async t => {
@@ -269,7 +274,13 @@ test('M1 A02: normal entry indexes supported documents and scan page anchors', {
 
 test('M1 desktop: import approval and local citation from the built workbench',
   { skip: process.env.LAB1_ASSISTANT_BROWSER_FIXTURE !== '1', timeout: 45000 }, async t => {
-    const f = await fixture(t);
+    let release;
+    const gate = new Promise(resolve => { release = resolve; });
+    t.after(() => release());
+    const f = await fixture(t, { liveModel: false, modelReply: async (input, payload) => {
+      await gate;
+      return researchReply(input, payload);
+    } });
     fs.writeFileSync(path.join(f.source, '本机验收.md'), '信号标记 8136');
     const messages = require('../src/db/repositories/messages.cjs').createMessageRepository(f.db);
     const suggestions = require('../src/db/repositories/suggestions.cjs').createSuggestionRepository(f.db);
@@ -290,8 +301,8 @@ test('M1 desktop: import approval and local citation from the built workbench',
     t.after(() => { server.closeAllConnections(); server.close(); });
     const browser = await require('playwright').chromium.launch({ channel: 'msedge', headless: true });
     t.after(() => browser.close());
-    const page = await browser.newPage();
-    await page.route('**/api/v1/assistant/**', async route => {
+    let page = await browser.newPage();
+    const relay = async route => {
       const request = route.request();
       const base = new URL(request.url());
       const body = request.postData();
@@ -302,7 +313,8 @@ test('M1 desktop: import approval and local citation from the built workbench',
         body: body ?? undefined
       });
       await route.fulfill({ status: response.status, contentType: 'application/json', body: await response.text() });
-    });
+    };
+    await page.route('**/api/v1/assistant/**', relay);
     await page.goto('http://127.0.0.1:' + server.address().port);
     await page.getByRole('button', { name: '个人知识库', exact: true }).click();
     await page.getByLabel('独立知识库令牌').fill(token);
@@ -328,6 +340,26 @@ test('M1 desktop: import approval and local citation from the built workbench',
     await dialog.getByText('拟更新 · 合成专业', { exact: true }).waitFor();
     await dialog.getByRole('button', { name: '批准', exact: true }).click();
     await page.getByText('专业 · 合成专业', { exact: true }).waitFor();
+    await f.approve({ kind: 'cloud_grant', rootId: f.root });
+    await page.getByRole('button', { name: 'Deeper Research', exact: true }).click();
+    await page.getByLabel('研究问题').fill('信号标记');
+    const accepted = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/research'));
+    await page.getByRole('button', { name: '开始新研究', exact: true }).click();
+    const research = (await (await accepted).json()).data;
+    assert.equal((await f.request('/research/' + research.id)).state, 'running');
+    await page.close();
+    release();
+    assert.equal((await researchWait(f, research.id)).state, 'completed');
+    page = await browser.newPage();
+    await page.route('**/api/v1/assistant/**', relay);
+    await page.goto('http://127.0.0.1:' + server.address().port);
+    await page.getByRole('button', { name: '个人知识库', exact: true }).click();
+    await page.getByLabel('独立知识库令牌').fill(token);
+    await page.getByRole('button', { name: '连接', exact: true }).click();
+    await page.getByRole('button', { name: 'Deeper Research', exact: true }).click();
+    await page.getByText('汇总报告 7316，仅覆盖当前样本', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '查看研究过程', exact: true }).click();
+    await page.getByText(/agent-2 · 交叉评审/).waitFor();
   });
 
 test('M2 A06: combined approval and batch admission follow the live todo lifecycle', async t => {
@@ -442,3 +474,240 @@ test('M2 A07: profile approval invalidates old work and new plans require fresh 
     planDigest: unversioned.digest, clientRequestId: randomUUID() }), /profile_changed/);
   assert.equal(tasks.get({ id: legacy.id, accountRef: owner }).state, 'preparing');
 });
+
+function researchPhase(payload) {
+  return /当前阶段 (\w+)/.exec(payload.messages[0].content)?.[1];
+}
+
+function researchReply(input, payload, overrides = {}) {
+  const phase = researchPhase(payload);
+  const id = input.evidence[0].id;
+  const defaults = {
+    explore: { answer: '独立结论 7316', citations: [id], gaps: ['还需评审'] },
+    review: { claim_id: input.shared[0]?.id, finding: '区分样本和结论', evidence_ids: [id],
+      severity: 'medium', proposed_revision: '明确只覆盖当前样本' },
+    synthesize: { answer: '汇总报告 7316，仅覆盖当前样本', citations: [id], disagreements: ['样本范围有限'] },
+    assess: { preferred: 'new', reason: '引用正确且边界清楚', complete: true }
+  };
+  return Response.json({ choices: [{ message: { content: JSON.stringify({ ...defaults[phase], ...overrides }) } }],
+    usage: { total_tokens: 23 } });
+}
+
+async function researchSource(f) {
+  fs.writeFileSync(path.join(f.source, 'research.md'), '合成研究标记 7316，只覆盖当前样本。');
+  await f.approve({ kind: 'import', rootId: f.root, names: ['research.md'] });
+  return (await f.request('/knowledge')).items[0].id;
+}
+
+const researchAgents = count => Array.from({ length: count }, (_, i) => ({
+  id: 'agent-' + (i + 1), modelId: i % 2 ? 'fixture-review' : 'fixture'
+}));
+
+async function researchWait(f, id, condition = state => state.state !== 'running') {
+  const end = Date.now() + 30000;
+  do {
+    const state = await f.request('/research/' + id);
+    if (condition(state)) return state;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  } while (Date.now() < end);
+  throw Error('research_timeout');
+}
+
+test('M3 A09 A10 A14: independent agents discuss, retain the better result and save only by approval', async t => {
+  let reports = 0;
+  const trace = [];
+  const f = await fixture(t, { liveModel: false, modelReply(input, payload) {
+    const phase = researchPhase(payload);
+    trace.push({ phase, input, model: payload.model });
+    if (phase === 'synthesize') {
+      reports++;
+      return researchReply(input, payload, { answer: reports === 1 ? '第一份较优报告' : '第二份较弱报告' });
+    }
+    if (phase === 'assess') return researchReply(input, payload, { preferred: reports === 1 ? 'new' : 'previous', complete: reports >= 2 });
+    return researchReply(input, payload);
+  } });
+  const doc = await researchSource(f);
+  const input = { clientRequestId: randomUUID(), question: '比较这个样本', sourceIds: [doc], effort: { preset: 'medium' } };
+  await f.request('/research', { ...input, agents: researchAgents(5) }, 400);
+  await f.request('/research', input, 403);
+  assert.equal(trace.length, 0);
+  await f.approve({ kind: 'cloud_grant', documentId: doc });
+  const opened = await f.request('/research', input, 202);
+  assert.equal(opened.agents.length, 2);
+  assert.notEqual(opened.agents[0].prompt, opened.agents[1].prompt);
+  assert.equal((await f.request('/research', input, 202)).id, opened.id);
+  const finished = await researchWait(f, opened.id);
+  assert.equal(finished.state, 'completed');
+  assert.equal(finished.result.answer, '第一份较优报告');
+  assert.equal(finished.budget.calls, 12);
+  assert.equal(finished.budget.tokens, 276);
+  assert.equal(trace[0].input.history.length, 0);
+  assert.equal(trace[1].input.history.length, 0);
+  assert.deepEqual(trace.slice(0, 2).map(entry => entry.input.shared.length), [0, 0]);
+  assert.deepEqual(trace.slice(2, 4).map(entry => entry.input.shared[0].agentId), ['agent-2', 'agent-1']);
+  assert.deepEqual(trace.slice(0, 2).map(entry => entry.model), ['deepseek-chat', 'deepseek-chat']);
+  const history = await f.request('/research/' + opened.id + '/artifacts');
+  assert.ok(history.items.some(entry => entry.phase === 'synthesize' && entry.data.answer === '第二份较弱报告'));
+  assert.ok((await f.request('/events?resourceId=' + opened.id)).items.some(item => item.type === 'artifact'));
+  assert.equal((await f.request('/research')).items[0].id, opened.id);
+  assert.equal(fs.readdirSync(path.join(f.storage, 'objects')).length, 1);
+
+  const save = await f.request('/research/' + opened.id + '/save-preview', { name: '合成报告.md', includeProcess: true }, 201);
+  assert.match(save.details.rows[0].text, /第一份较优报告/);
+  await f.decide(save, 'reject');
+  assert.equal(fs.readdirSync(path.join(f.storage, 'objects')).length, 1);
+  const approved = await f.request('/research/' + opened.id + '/save-preview', { name: '合成报告.md' }, 201);
+  assert.equal((await f.decide(approved)).state, 'committed');
+  assert.equal(fs.readdirSync(path.join(f.storage, 'objects')).length, 2);
+
+  const four = await f.request('/research', { ...input, clientRequestId: randomUUID(), agents: researchAgents(4), effort: { preset: 'low' } }, 202);
+  const result = await researchWait(f, four.id);
+  assert.equal(result.agents.length, 4);
+  assert.equal(result.budget.calls, 9);
+  assert.equal(result.budget.rounds, 1);
+  const firstFour = trace.slice(12, 16);
+  assert.ok(firstFour.every(entry => entry.phase === 'explore' && !entry.input.shared.length));
+  assert.ok(firstFour.some(entry => entry.model === 'fixture-review-model'));
+  await f.request('/research/' + opened.id + '/close', {});
+  await f.request('/research/' + opened.id, undefined, 410);
+  f.restart();
+  assert.equal((await f.request('/research')).items.length, 0);
+  await f.request('/research/' + four.id, undefined, 410);
+  assert.equal((await f.request('/knowledge')).items.length, 2);
+});
+
+test('M3 A11: independent budget limits, concurrent reservations and paused time', () => {
+  const { createBudget } = require('../src/research/budget.cjs');
+  let now = 0;
+  const limits = { tokens: 900, calls: 2, rounds: 1, activeMs: 100 };
+  const budget = createBudget(limits, () => now);
+  const messages = [{ content: 'fixture' }];
+  budget.start();
+  assert.equal(budget.newRound(), null);
+  const first = budget.reserve(messages, 300, 1000, 32768);
+  assert.ok(first.amount);
+  assert.equal(budget.reserve(messages, 300, 1000, 32768).stop, 'tokens');
+  budget.settle(first, 20);
+  const second = budget.reserve(messages, 300, 1000, 32768);
+  assert.ok(second.amount);
+  assert.equal(budget.reserve(messages, 300, 1000, 32768).stop, 'calls');
+  budget.settle(second, null);
+  assert.equal(budget.snapshot().estimatedCalls, 1);
+  budget.increase({ calls: 3 });
+  assert.equal(budget.newRound(), 'rounds');
+  now = 40;
+  budget.pause();
+  now = 600;
+  budget.start();
+  now = 660;
+  assert.equal(budget.reserve(messages, 300, 1000, 32768).stop, 'time');
+  assert.equal(budget.snapshot().activeMs, 100);
+  const over = createBudget(limits);
+  over.start();
+  const reserved = over.reserve(messages, 100, 1000, 32768);
+  over.settle(reserved, reserved.amount + 1);
+  assert.equal(over.reserve(messages, 100, 1000, 32768).stop, 'usage_overrun');
+  assert.equal(over.snapshot().excessTokens, 1);
+});
+
+test('M3 A11 A12: pause fences late responses, updates use remaining budget, and cancellation stops dispatch', async t => {
+  let release;
+  let started = false;
+  let resumed;
+  const f = await fixture(t, { liveModel: false, modelReply(input, payload) {
+    if (!started) {
+      started = true;
+      return new Promise(resolve => { release = () => resolve(researchReply(input, payload)); });
+    }
+    resumed = input;
+    return researchReply(input, payload);
+  } });
+  const doc = await researchSource(f);
+  await f.approve({ kind: 'cloud_grant', documentId: doc });
+  const opened = await f.request('/research', { clientRequestId: randomUUID(), question: '核对样本', sourceIds: [doc],
+    effort: { preset: 'custom', limits: { tokens: 36000, calls: 1, rounds: 1, activeMs: 5000 } } }, 202);
+  const running = await researchWait(f, opened.id, state => state.budget.calls === 1);
+  assert.ok(started);
+  const control = (state, action, input) => f.request('/research/' + opened.id + '/control', {
+    action, input, expectedVersion: state.version, clientRequestId: randomUUID()
+  });
+  const paused = await control(running, 'pause');
+  const updated = await control(paused, 'add_requirement', { requirement: '解释样本边界' });
+  const pausedMs = updated.budget.activeMs;
+  release(); // 模拟供应商已经收到调用，取消后仍返回回执。
+  const settled = await researchWait(f, opened.id, state => state.budget.reserved === 0);
+  assert.equal(settled.budget.activeMs, pausedMs);
+  assert.equal(settled.budget.calls, 1);
+  assert.equal(settled.result, null);
+  assert.equal((await f.request('/research/' + opened.id + '/artifacts')).items.length, 0);
+  await control(settled, 'resume');
+  const exhausted = await researchWait(f, opened.id);
+  assert.equal(exhausted.reason, 'calls');
+  await control(exhausted, 'increase_budget', { limits: { calls: 2 } });
+  const again = await researchWait(f, opened.id);
+  assert.equal(again.budget.calls, 2);
+  assert.equal(again.budget.rounds, 1);
+  assert.equal(resumed.requirements[0].text, '解释样本边界');
+  assert.ok(again.result.provisional);
+  const stopped = await control(again, 'cancel');
+  assert.equal(stopped.state, 'cancelled');
+  assert.equal(stopped.budget.calls, 2);
+  const newTopic = await f.request('/research', { clientRequestId: randomUUID(), question: '另一道样本问题', sourceIds: [doc] }, 202);
+  assert.notEqual(newTopic.id, opened.id);
+  await researchWait(f, newTopic.id);
+  assert.equal((await f.request('/research')).items.length, 2);
+});
+
+test('M3 A12: model failures keep configured identities and authorized sources can be revoked', async t => {
+  let failAll = false;
+  let hold = false;
+  let release;
+  const f = await fixture(t, { liveModel: false, modelReply(input, payload) {
+    if (hold) return new Promise(resolve => { release = () => resolve(researchReply(input, payload)); });
+    if (failAll || payload.model === 'deepseek-chat') return new Response('{}', { status: 503 });
+    return researchReply(input, payload);
+  } });
+  const doc = await researchSource(f);
+  await f.approve({ kind: 'cloud_grant', documentId: doc });
+  async function start() {
+    return f.request('/research', { clientRequestId: randomUUID(), question: '核对样本', sourceIds: [doc], agents: researchAgents(2) }, 202);
+  }
+  const first = await researchWait(f, (await start()).id);
+  assert.equal(first.state, 'partial');
+  assert.equal(first.summarizer, 'agent-2');
+  assert.deepEqual(first.failed, [{ agentId: 'agent-1', code: 'model_failed' }]);
+  failAll = true;
+  const failed = await researchWait(f, (await start()).id);
+  assert.equal(failed.state, 'failed');
+  assert.equal(failed.failed.length, 2);
+  hold = true;
+  const third = await f.request('/research', { clientRequestId: randomUUID(), question: '核对样本', sourceIds: [doc],
+    effort: { preset: 'custom', limits: { tokens: 36000, calls: 1, rounds: 1, activeMs: 5000 } } }, 202);
+  await researchWait(f, third.id, state => state.budget.calls === 1);
+  await f.approve({ kind: 'cloud_revoke', documentId: doc });
+  release();
+  const revoked = await researchWait(f, third.id, state => state.budget.reserved === 0);
+  assert.equal(revoked.state, 'paused');
+  assert.equal(revoked.reason, 'source_changed');
+  assert.equal(revoked.result, null);
+  await f.request('/research/' + third.id + '/control', { action: 'resume', expectedVersion: revoked.version, clientRequestId: randomUUID() }, 409);
+});
+
+test('M3 live: two configured Agents exchange evidence and produce a report',
+  { skip: process.env.LAB1_RESEARCH_LIVE_FIXTURE !== '1', timeout: 60000 }, async t => {
+    const f = await fixture(t, { liveModel: true, outputLimit: 768 });
+    const doc = await researchSource(f);
+    await f.approve({ kind: 'cloud_grant', documentId: doc });
+    const opened = await f.request('/research', { clientRequestId: randomUUID(), sourceIds: [doc], agents: researchAgents(2),
+      question: '根据合成资料回答研究标记是什么，以及这条资料可以支持多大范围的结论？' }, 202);
+    const task = await researchWait(f, opened.id);
+    const { items } = await f.request('/research/' + opened.id + '/artifacts');
+    for (const phase of ['explore', 'review', 'synthesize', 'assess']) {
+      assert.ok(items.some(item => item.phase === phase), phase + ': ' + task.state);
+    }
+    assert.equal(task.failed.length, 0);
+    assert.ok(task.result.evidence.length);
+    assert.match(task.result.answer, /7316/);
+    assert.ok(task.budget.tokens > 0);
+    t.diagnostic(JSON.stringify({ state: task.state, calls: task.budget.calls, tokens: task.budget.tokens, phaseCount: 4 }));
+  });

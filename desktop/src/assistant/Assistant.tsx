@@ -1,7 +1,9 @@
-import {useEffect, useState} from 'react';
+import {useCallback, useEffect, useState} from 'react';
 import {invoke} from '@tauri-apps/api/core';
 import {readCredentials} from '../api';
 import {isTauriApp} from '../secure';
+import Research from './Research';
+import type {EffortPresets} from './Research';
 import './assistant.css';
 
 type Root = {id: string; path: string};
@@ -65,6 +67,8 @@ export default function Assistant({candidate, onCandidateDone}: {candidate?: num
   const [token, setToken] = useState(browserToken);
   const [tokenDraft, setTokenDraft] = useState('');
   const [models, setModels] = useState<Model[]>([]);
+  const [effortPresets, setEffortPresets] = useState<EffortPresets>();
+  const [showResearch, setShowResearch] = useState(false);
   const [model, setModel] = useState('');
   const [useModel, setUseModel] = useState(false);
   const [roots, setRoots] = useState<Root[]>([]);
@@ -89,10 +93,11 @@ export default function Assistant({candidate, onCandidateDone}: {candidate?: num
   const [todoSelection, setTodoSelection] = useState<number[]>([]);
   const [profile, setProfile] = useState<Field[]>([]);
   const [fieldDraft, setFieldDraft] = useState<Field>({key: '', value: ''});
+  const researchRequest = useCallback(<T,>(route: string, body?: unknown) => api<T>(token, route, body), [token]);
 
   async function refresh(credentials: string, offset = 0) {
     const [cap, folders, knowledge, chats, cloud, openTodos, fields] = await Promise.all([
-      api<{models: Model[]}>(credentials, '/capabilities'),
+      api<{models: Model[]; effortPresets: EffortPresets}>(credentials, '/capabilities'),
       api<{items: Root[]}>(credentials, '/roots'),
       api<{items: Document[]}>(credentials, '/knowledge?offset=' + offset),
       api<{items: {id: string}[]}>(credentials, '/sessions'),
@@ -101,6 +106,7 @@ export default function Assistant({candidate, onCandidateDone}: {candidate?: num
       api<{items: Field[]}>(credentials, '/profile')
     ]);
     setModels(cap.models);
+    setEffortPresets(cap.effortPresets);
     setModel(old => cap.models.some(entry => entry.id === old) ? old : cap.models[0]?.id || '');
     setRoots(folders.items);
     setDocs(knowledge.items);
@@ -178,12 +184,23 @@ export default function Assistant({candidate, onCandidateDone}: {candidate?: num
             browserToken = '';
             setToken(''); setSession(undefined); setPreview(undefined); setReference(undefined);
             setDocs([]); setRoots([]); setEntries([]); setModels([]); setGrants([]); setRoot('');
+            setShowResearch(false); setEffortPresets(undefined);
           })}>忘记令牌</button>
         </div>
       </form>
       {notice && <div className="callout" role="status">{notice}</div>}
       {token && <>
-        <section className="settings-card">
+        <div className="assistant-actions">
+          <button className="button" onClick={() => setShowResearch(false)}>普通问答</button>
+          <button className="button" disabled={!effortPresets} onClick={() => setShowResearch(true)}>Deeper Research</button>
+        </div>
+        {showResearch && effortPresets && <Research request={researchRequest} models={models} sources={docs}
+          presets={effortPresets} pendingPreview={!!preview} save={async (id, name, includeProcess) => {
+            if (preview) throw Error('preview_pending');
+            setPreview(await api<Preview>(token, '/research/' + id + '/save-preview', {name, includeProcess}));
+            setDecisionId(crypto.randomUUID());
+          }} />}
+        {!showResearch && <section className="settings-card">
           <h2>普通问答</h2>
           <label>模型<select value={model} onChange={event => setModel(event.target.value)}>
             {models.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
@@ -222,7 +239,7 @@ export default function Assistant({candidate, onCandidateDone}: {candidate?: num
           </article>)}
           {reference && <div className="assistant-turn"><strong>{reference.title} · {reference.locator}</strong><p className="assistant-text">{reference.quote}</p>
             <button className="button" onClick={() => setReference(undefined)}>收起引用</button></div>}
-        </section>
+        </section>}
         <section className="settings-card">
           <h2>待办纳入知识库</h2>
           <button className="button" disabled={busy} onClick={() => void run(() => refresh(token, docOffset))}>刷新待办与资料</button>

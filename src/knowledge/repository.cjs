@@ -482,6 +482,25 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
       (!!checkGrant.get(owner, doc.id) || (!!doc.root && !!checkGrant.get(owner, doc.root)));
   }
 
+  function researchSources(query, selected) {
+    const result = search(query, selected);
+    if (!selected?.length) return result;
+    const seen = new Set(result.map(item => item.id));
+    const selectedChunks = db.prepare('SELECT c.*,d.id AS doc FROM kb_chunks c JOIN kb_documents d ON d.rev=c.rev WHERE d.owner=? AND d.id=? ORDER BY c.id LIMIT 3');
+    for (const id of selected) {
+      // 显式指定文档时，即使问题没有关键词，也提供该文档的开头片段。
+      for (const row of selectedChunks.all(owner, id)) {
+        if (seen.has(String(row.id))) continue;
+        const item = evidence(row);
+        if (item) {
+          seen.add(item.id);
+          result.push(item);
+        }
+      }
+    }
+    return result;
+  }
+
   function entries(id, directory = '', offset = 0) {
     const root = rootOrFail(id);
     const target = directory ? resolveSource(root, directory) : checkedAbsolute(root.path);
@@ -498,7 +517,7 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
   }
 
   return {
-    preview, decide, search, getEvidence, cloudAllowed, entries,
+    preview, decide, search, researchSources, getEvidence, cloudAllowed, entries,
     todos: todos.list,
     profile: () => Object.entries(profiles.fields(db)).map(([key, value]) => ({ key, value })),
     getPreview(id) { purgePreviews(); const receipt = previews.get(id); if (!receipt) fail('not_found', 404); return review(receipt); },
