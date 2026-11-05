@@ -7,8 +7,8 @@
 </p>
 
 <p align="center">
-  <strong>Campus updates, personal tasks, and spreadsheets in one workflow.</strong><br>
-  Your computer organizes messages and prepares plans. You review and approve each edit.
+  <strong>Turn campus updates into tasks and ask questions about your own notes.</strong><br>
+  Organize documents and run research on the desktop. Review spreadsheet plans on desktop or Android.
 </p>
 
 <p align="center">
@@ -19,11 +19,21 @@
   <a href="#project-layout-and-documentation">Documentation</a>
 </p>
 
-**Campus Desk** is a personal campus assistant. It turns messages from selected QQ groups or contacts into task suggestions, prepares fill plans for Tencent Docs spreadsheets, and lets you review, supplement, and approve those plans from Android or the desktop.
+**Campus Desk** is a personal campus assistant. It turns selected QQ messages into task suggestions and prepares Tencent Docs spreadsheet plans for review on desktop or Android. The desktop also includes a local knowledge base with source citations and a multi-agent **Deeper Research** workspace.
 
 This is a **single-user, single-host development prototype**, primarily validated on Windows. The Android client is at **0.5.0**. KDocs support is still being assessed for technical feasibility.
 
 ## Preview
+
+### Desktop knowledge base and Deeper Research
+
+Open citations in a knowledge base answer to check the source excerpt and its page or line.
+
+<img src="docs/images/readme/desktop-knowledge.png" alt="Desktop knowledge Q&A with a synthetic answer, two citations, and an expanded PDF excerpt." width="100%">
+
+Deeper Research shows budget usage, the best report so far, and the agents’ review process.
+
+<img src="docs/images/readme/desktop-research.png" alt="Desktop Deeper Research with a synthetic report, source citations, budget usage, and agent review." width="100%">
 
 ### Organize on your computer. Decide on your phone.
 
@@ -67,6 +77,15 @@ The actual desktop message center brings together original updates, attachments,
 
 ## Features
 
+| Desktop feature | What you can do |
+| --- | --- |
+| Personal knowledge base | Import Markdown, TXT, DOCX, PDF, PNG, and JPEG. Text extraction and OCR run locally. Open search results at a source excerpt and its page, paragraph, or line. |
+| Knowledge Q&A | Ask questions about notes and profile fields. Grant model access to selected material to generate answers with source citations. |
+| Tasks and profile | Approve source admission when keeping a task, or admit sources from existing tasks in batches. Completed or deleted tasks leave search. Approved profile changes trigger fresh preparation and approval of affected spreadsheet plans. |
+| Deeper Research | Configure two to four agents to explore independently, review each other's findings, revise, and compare results. Set limits for tokens, calls, rounds, and active time. Pause, resume, cancel, or add requirements. |
+
+Research runs in the host process. Reopen the desktop window to check progress. Saving a report requires approval of a write preview, and the host releases unsaved research when it exits.
+
 | Message organization | Personal tasks | Approved spreadsheet edits |
 | --- | --- | --- |
 | Select QQ groups, members, or contacts; filter by stable account identifiers | Merge updates about the same activity and keep or dismiss suggestions | Read Tencent spreadsheets, locate your row, and prepare cell-level changes |
@@ -77,9 +96,9 @@ The actual desktop message center brings together original updates, attachments,
 | --- | --- |
 | Android | Kotlin / Jetpack Compose; Keystore-encrypted device tokens; review, input, and approval |
 | Desktop | React / TypeScript / Vite; Tauri 2 Windows shell with Credential Manager |
-| Host | Node.js 24+ / SQLite / Playwright; message processing, plans, execution, and verification |
+| Host | Node.js 24 / SQLite FTS5 / Playwright; message processing, document search, research, and spreadsheet execution |
 | Private network | Tailscale Serve HTTPS and Android userspace tsnet; separate application device pairing |
-| Models and attachments | DeepSeek for analysis and summaries; PDF / DOCX extraction and local Tesseract image OCR |
+| Models and attachments | Configure Chat Completions compatible models in a local file; PDF / DOCX extraction and local Tesseract OCR for images and scanned pages |
 
 The phone does not operate QQ or the document browser directly. The host service and gateway bind to loopback addresses, and the phone connects over the private network. The embedded Android transport does not use the system `VpnService`; connectivity has been verified on one phone while its existing VPN remained active.
 
@@ -89,7 +108,11 @@ The phone does not operate QQ or the document browser directly. The host service
 flowchart LR
     Q[Selected QQ sources] --> H[Host storage and analysis]
     H --> T[Merge task suggestions]
-    T --> K[Keep or dismiss on phone]
+    T --> K[Keep on desktop or Android]
+    K -->|Approve source admission| L[Local knowledge base]
+    D[Import documents] --> L
+    L --> R[Local search and citations]
+    R -->|Grant model access| S[Q&A or Deeper Research]
     H --> P[Prepare a plan without writing]
     P --> A[Review and approve on phone or desktop]
     A --> W[Host rechecks and writes]
@@ -102,7 +125,7 @@ Keeping a task does not approve a spreadsheet edit. If the outcome becomes uncer
 
 ### Requirements
 
-- Backend: Node.js **24+** and npm. Real Tencent spreadsheet execution uses an installed Microsoft Edge browser.
+- Backend uses Node.js 24 and npm. The desktop knowledge base is validated on **Node.js 24.22.2 / SQLite 3.53.4**. Real Tencent spreadsheet execution uses an installed Microsoft Edge browser.
 - Desktop web: npm dependencies in both the repository root and `desktop/`. Building the Tauri shell also requires the Rust MSVC toolchain and WebView2.
 - Android: JDK 21 and Android SDK 36. Rebuilding the embedded transport also requires Go and the NDK; see the build scripts and `mobile/tsnet-probe/go/go.mod` for versions.
 - Real use: configure your own QQ / NapCat setup, dedicated Tencent Docs login session, personal profile, and DeepSeek API access. Private phone access additionally requires Tailscale configuration and device pairing.
@@ -121,6 +144,16 @@ npm run desktop:build
 ```
 
 The first two commands install backend and desktop dependencies from their lockfiles. `npm test` runs backend tests; the final command checks desktop TypeScript and builds the web UI. `npm ci` recreates the corresponding `node_modules` directory. These commands do not configure real accounts or fill online spreadsheets.
+
+### Use desktop knowledge search and research
+
+Prepare the local database, pinned runtime, and documents using the [knowledge base setup and import guide (Chinese)](docs/setup.md#桌面知识库). On a configured Windows host, run the following command to start the local knowledge service. `-CopyDesktopToken` copies the separate connection token for first use.
+
+```powershell
+.\tools\start-assistant.ps1 -CopyDesktopToken
+```
+
+Keep the service terminal open. Open the knowledge base in the Campus Desk sidebar, paste the token, and connect. Local search is available after import. Approve model access to the material you want to use in model Q&A or research. See the [same guide](docs/setup.md#桌面知识库) for running the QQ and spreadsheet workers alongside the knowledge service.
 
 ### Configure real use before starting
 
@@ -157,19 +190,20 @@ See the [Android guide (Chinese)](mobile/android/README.md) for details. The cur
 ## Validation and Limitations
 
 - This is a single-user, single-host Windows development prototype. Spreadsheet execution is implemented for Tencent Docs; KDocs/WPS, Feishu, and WeChat integration are not implemented.
+- Deeper Research currently uses authorized knowledge base excerpts. Synthetic runs covered agent collaboration, budget controls, and reconnection. Web evidence gathering and comparisons across effort levels are planned.
 - Phone notifications depend on background polling. Recovery after process termination and all-day reliability still need work.
 - Complex spreadsheet handling, deployment scope, and recovery capabilities have limits. See [usage limitations and data handling](docs/validation-and-data.en.md).
 
 ## Data and Credentials
 
 - Accounts, profiles, attachments, and sessions are stored locally under `.private/` and are not distributed with the source. Supply your own credentials and platform logins.
-- Analysis and summaries send necessary content to DeepSeek. Image OCR runs locally.
+- OCR for images and scanned pages runs locally. The knowledge base sends relevant excerpts to the selected model after you grant access to a file or folder. Existing message analysis, spreadsheet field mapping, and briefings use their own model configuration.
 - GitHub does not back up ignored private data; keep separate backups. See [data and credential details](docs/validation-and-data.en.md#data-and-credentials).
 
 ## Project Layout and Documentation
 
 ```text
-src/                    Host APIs, tasks, message processing, and document execution
+src/                    Host APIs, knowledge base, research, message processing, and spreadsheet execution
 mobile/android/         Native Android client and tests
 mobile/tsnet-probe/go/   Shared userspace private-network bridge source
 desktop/                Web workspace and Tauri shell

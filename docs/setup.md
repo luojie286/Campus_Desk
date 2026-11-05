@@ -64,6 +64,45 @@ npm run desktop:dev
 
 启动桌面 Web 开发界面，访问 `http://127.0.0.1:5173` 并配置本机连接。浏览器开发版使用本机 localStorage，Tauri 壳使用 Windows Credential Manager。
 
+## 桌面知识库
+
+知识库复用主机配置中的当前账号和本机 SQLite。先按上文初始化主机并填好 `account_id`。首次导入和知识库启动脚本使用固定的 Windows x64 Node.js 24.22.2。将发布包中的 `node.exe` 和官方 `SHASUMS256.txt` 放在 `.private/runtime/node-v24.22.2/`，按清单中的 `win-x64/node.exe` 核对 SHA-256，再运行。启动脚本也会校验该文件。 [Node.js 发布目录](https://nodejs.org/dist/v24.22.2/)
+
+### 首次导入
+
+在仓库根目录运行以下命令。将 `C:\Notes` 换成你授权的实际目录，将 `archive` 换成想排除的子目录。填入一个不存在的子目录名可保留目录内所有支持的文字资料。入口路径若经过 Windows 目录联接，应填写解析后的实际目录。
+
+```powershell
+$kbNode = '.\.private\runtime\node-v24.22.2\node.exe'
+$notes = 'C:\Notes'
+$exclude = 'archive'
+& $kbNode tools/import-notes.cjs plan $notes $exclude
+```
+
+`plan` 只读取目录中的 Markdown、TXT、DOCX 和 PDF，输出数量、字节数与清单摘要。核对范围后，将下面的占位符替换为返回的 `digest`。`apply` 校验清单摘要，首次为原数据库创建备份，再保存本机副本和索引，并创建缺失的 `.private/assistant.config.json`。原始文件保留在源目录。图片可在桌面知识库的导入预览中单独批准。
+
+```powershell
+& $kbNode tools/import-notes.cjs apply $notes $exclude '<digest>'
+```
+
+已有知识库 schema 1 的主机可在服务停止后运行 `& $kbNode tools/upgrade-assistant.cjs`。它先备份数据库，再升级到 schema 2，保留现有资料。
+
+### 连接、问答和研究
+
+```powershell
+.\tools\start-assistant.ps1 -CopyDesktopToken
+```
+
+该命令启动本机知识库服务，并将独立令牌复制到剪贴板。保持终端打开，在课桌侧栏选择「个人知识库」，粘贴令牌并连接。Windows 桌面客户端会把令牌保存到 Credential Manager。下次连接可省略 `-CopyDesktopToken`。
+
+可选模型在 `.private/assistant.config.json` 中配置。首次导入生成 DeepSeek 示例，凭证从启动终端的 `DEEPSEEK_API_KEY` 读取。先在资料列表批准模型处理权限，再开启模型问答或进入 Deeper Research。研究报告与过程保存使用写入预览审批，关窗后可重新连接查看主机中的进度。
+
+需要同时运行消息、待办和填表功能时，在同一端口的服务停止后使用以下命令。`-WithLegacy` 启用原有工作者，并沿用当前的执行开关和获批任务队列。
+
+```powershell
+.\tools\start-assistant.ps1 -WithLegacy
+```
+
 ## 手机私网连接
 
 电脑安装并登录 Tailscale，确认在线。在主服务就绪后运行：

@@ -8,6 +8,7 @@ const {chromium} = require('playwright');
 
 const root = path.resolve(__dirname, '..');
 const output = path.join(root, 'docs/images/readme');
+const assistantOnly = process.argv.includes('--assistant-only');
 const stamp = '2026-11-05T00:40:00Z';
 const target = 'https://docs.qq.com/sheet/DEMO_REGISTRATION';
 
@@ -44,8 +45,58 @@ const sources = [
     last_at: stamp, last_sender_id: '2003', last_sender_name: '课程助教', last_text: messages[2].text}
 ];
 
+const evidence = [
+  {id: '701', documentId: 'reading-guide', revision: 'demo-guide', title: '论文阅读指南 · 演示.pdf',
+    locator: '第 3 页', quote: '每条阅读记录保留论文主张、对应页码和证据类型。实验结论须连同样本、对照条件及局限记录。'},
+  {id: '702', documentId: 'evidence-notes', revision: 'demo-notes', title: '证据核对笔记 · 演示.md',
+    locator: '第 18–24 行', quote: '证据表设四列：主张、原文位置、适用范围、待核对事项。未核实的判断单独标记。'}
+];
+const researchQuestion = '如何把论文阅读记录整理成可复核的证据表？';
+const researchReport = '用「主张、原文位置、适用范围、待核对事项」组织记录。每条主张关联原文页码和证据类型；实验结果同时记录样本、对照和局限。未核实的解释单独列出，留待复核。';
+const assistantFixtures = {
+  '/capabilities': {enabled: true, models: [{id: 'demo', label: '演示模型'}], effortPresets: {
+    low: {tokens: 36000, calls: 9, rounds: 1, activeMs: 300000},
+    medium: {tokens: 100000, calls: 27, rounds: 3, activeMs: 900000},
+    high: {tokens: 200000, calls: 54, rounds: 6, activeMs: 1800000}
+  }},
+  '/roots': {items: []},
+  '/knowledge': {items: evidence.map(item => ({id: item.documentId, name: item.title, rootId: 'demo-root', status: 'active', kind: 'file'}))},
+  '/grants': {items: evidence.map(item => ({target: item.documentId}))},
+  '/todos': {items: [{id: 401, title: '整理课程笔记 · 演示', admitted: 1}]},
+  '/profile': {items: []},
+  '/sessions': {items: [{id: 'demo-chat', state: 'idle'}]},
+  '/sessions/demo-chat': {id: 'demo-chat', state: 'idle', seq: 2, turns: [
+    {id: 'demo-turn', question: '第一次读论文时，应该记录哪些证据？',
+      result: {status: 'answered', answer: '先写下论文的核心主张，再给每项主张标出原文页码和证据类型。阅读实验部分时，一并记录样本、对照条件和局限，便于之后核对。', evidence}}
+  ]},
+  '/research': {items: [{id: 'demo-research', question: researchQuestion, state: 'completed'}]},
+  '/research/demo-research': {id: 'demo-research', question: researchQuestion, state: 'completed',
+    version: 2, seq: 13, phase: null, reason: null, sourceCount: 2, limited: false, summarizer: 'agent-1',
+    failed: [], requirements: [], budget: {
+      limits: {tokens: 36000, calls: 9, rounds: 1, activeMs: 300000}, tokens: 4128, reserved: 0,
+      calls: 6, rounds: 1, activeMs: 8300, estimatedCalls: 0, excessTokens: 0
+    },
+    result: {answer: researchReport, evidence, provisional: false,
+      gaps: ['下次补充一篇论文，检查表格能否覆盖不同研究方法。'], disagreements: []}},
+  '/research/demo-research/artifacts': {items: [
+    {id: 'demo-draft', seq: 2, round: 1, phase: 'explore', agentId: 'agent-1', modelId: 'demo',
+      data: {answer: '先用主张和原文位置建立证据索引。'}},
+    {id: 'demo-review', seq: 4, round: 1, phase: 'review', agentId: 'agent-2', modelId: 'demo',
+      data: {finding: '只记页码会遗漏结论的适用条件。', proposed_revision: '补充样本、对照条件及待核对事项。'}},
+    {id: 'demo-summary', seq: 6, round: 1, phase: 'synthesize', agentId: 'agent-1', modelId: 'demo',
+      data: {answer: researchReport}},
+    {id: 'demo-assessment', seq: 8, round: 1, phase: 'assess', agentId: 'agent-2', modelId: 'demo',
+      data: {reason: '新版包含可定位的证据，并区分局限与待核对内容。', preferred: 'new'}}
+  ], next: 8}
+};
+for (const item of evidence) assistantFixtures['/evidence/' + item.id] = item;
+
 function fixture(url) {
   const endpoint = url.pathname.replace(/^\/api/, '');
+  if (endpoint.startsWith('/v1/assistant/')) {
+    const route = endpoint.slice('/v1/assistant'.length);
+    if (Object.hasOwn(assistantFixtures, route)) return {epoch: 'demo', data: assistantFixtures[route]};
+  }
   const lists = {'/v1/sources': sources, '/v1/messages': messages, '/v1/suggestions': suggestions,
     '/v1/todos': todos, '/v1/tasks': tasks, '/v1/listen-sources': [], '/v1/notifications': []};
   if (endpoint === '/health') return {running: true, sourceConfigured: true};
@@ -104,12 +155,39 @@ async function main() {
     const page = await context.newPage();
     page.on('pageerror', error => violations.push(error.message));
     await page.goto(base, {waitUntil: 'networkidle'});
-    await page.getByRole('heading', {name: '周五前提交实验报告', exact: true}).waitFor();
-    await page.screenshot({path: path.join(output, 'desktop-inbox.png'), animations: 'disabled'});
-    await page.getByRole('button', {name: '查看审批', exact: true}).click();
-    await page.getByRole('heading', {name: '拟填内容', exact: true}).waitFor();
-    await page.screenshot({path: path.join(output, 'desktop-approval.png'), animations: 'disabled'});
+    if (!assistantOnly) {
+      await page.getByRole('heading', {name: '周五前提交实验报告', exact: true}).waitFor();
+      await page.screenshot({path: path.join(output, 'desktop-inbox.png'), animations: 'disabled'});
+      await page.getByRole('button', {name: '查看审批', exact: true}).click();
+      await page.getByRole('heading', {name: '拟填内容', exact: true}).waitFor();
+      await page.screenshot({path: path.join(output, 'desktop-approval.png'), animations: 'disabled'});
+      await page.getByRole('button', {name: '关闭详情', exact: true}).click();
+    }
+    await page.getByRole('button', {name: '个人知识库', exact: true}).click();
+    await page.getByLabel('独立知识库令牌').fill('synthetic-readme-assistant');
+    await page.getByRole('button', {name: '连接', exact: true}).click();
+    await page.getByLabel('使用模型整理已授权资料', {exact: true}).check();
+    const reference = evidence[0];
+    await page.getByRole('button', {name: reference.title + ' · ' + reference.locator, exact: true}).click();
+    await page.getByText(reference.quote, {exact: true}).waitFor();
+    await page.setViewportSize({width: 1440, height: 940});
+    await page.getByRole('heading', {name: '普通问答', exact: true}).evaluate(element =>
+      element.closest('section').scrollIntoView({block: 'start'}));
+    await page.screenshot({path: path.join(output, 'desktop-knowledge.png'), animations: 'disabled'});
+
+    await page.getByRole('button', {name: 'Deeper Research', exact: true}).click();
+    await page.getByRole('heading', {name: '当前较优报告', exact: true}).waitFor();
+    await page.getByRole('button', {name: '查看研究过程', exact: true}).click();
+    await page.getByText('只记页码会遗漏结论的适用条件。', {exact: true}).waitFor();
+    await page.setViewportSize({width: 1440, height: 1100});
+    await page.getByRole('heading', {name: '研究进度', exact: true}).evaluate(element =>
+      element.closest('section').scrollIntoView({block: 'start'}));
+    await page.screenshot({path: path.join(output, 'desktop-research.png'), animations: 'disabled'});
     if (violations.length) throw Error(violations.join('; '));
+    if (assistantOnly) {
+      console.log('Saved knowledge and research screenshots to docs/images/readme/');
+      return;
+    }
     // Android previews are rendered by the real Compose UI in ScreenTest.
     // They are explicitly labelled Robolectric previews, not device screenshots.
     const mobile = path.join(root, 'mobile/android/app/build/reports/mobile-preview');

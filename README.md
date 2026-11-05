@@ -7,8 +7,8 @@
 </p>
 
 <p align="center">
-  <strong>校园里的通知、待办与表格，在一个工作流里处理。</strong><br>
-  电脑整理消息、准备资料，手机核对计划；每一次填写，都由你批准。
+  <strong>把校园消息变成待办，用个人资料回答问题。</strong><br>
+  在桌面整理知识与开展研究，在桌面或手机核对并批准填表计划。
 </p>
 
 <p align="center">
@@ -19,11 +19,21 @@
   <a href="#目录与文档">文档</a>
 </p>
 
-**课桌（Campus Desk）** 是面向个人的校园助手：从指定 QQ 群或好友的消息中整理待办，为腾讯在线表格准备填写计划，并通过 Android 或桌面端核对、补充和审批。
+**课桌（Campus Desk）** 是面向个人的校园助手。从指定 QQ 消息整理待办，为腾讯在线表格准备填写计划，并通过 Android 或桌面核对和审批。桌面还提供可引用原文的本地知识库，以及多 Agent 的 **Deeper Research** 工作台。
 
 当前为 **单用户、单主机的开发原型**，主要在 Windows 上验证。Android 已实现至 **0.5.0**；金山文档处于可行性分析阶段。
 
 ## 界面预览
+
+### 桌面知识库与 Deeper Research
+
+普通问答可打开引用，核对原文片段及页码或行号。
+
+<img src="docs/images/readme/desktop-knowledge.png" alt="桌面知识库普通问答，展示合成回答、两条引用和展开的 PDF 原文片段。" width="100%">
+
+Deeper Research 展示已用预算、当前较优报告和 Agent 评审过程。
+
+<img src="docs/images/readme/desktop-research.png" alt="桌面 Deeper Research，展示研究预算、带引用的报告和 Agent 交叉评审，内容为合成演示。" width="100%">
 
 ### 电脑整理消息，手机决定行动
 
@@ -67,6 +77,15 @@
 
 ## 核心能力
 
+| 桌面能力 | 使用方式 |
+| --- | --- |
+| 个人知识库 | 导入 Markdown、TXT、DOCX、PDF、PNG 和 JPEG。文本、扫描页和图片可在本机解析，检索结果可打开原文片段及页码、段落或行号。 |
+| 普通问答 | 用自然语言检索笔记和个人资料。为指定资料授予模型处理权限后，可让模型结合命中片段整理带引用的回答。 |
+| 待办与资料联动 | 保留待办时可一并审批纳入来源，也可批量纳入已有待办。完成或删除后，相关来源退出检索。批准更新个人资料后，受影响的旧填表计划会重新准备并等待审批。 |
+| Deeper Research | 配置 2–4 位 Agent，各自分析、交叉评审、修订并比较结果。可限制 token、调用次数、轮数和有效运行时间，也可暂停、继续、取消或补充要求。 |
+
+研究在主机进程中运行，关闭桌面窗口后可重新连接查看进度。保存报告前会展示写入预览；主机退出时释放未保存的研究记录。
+
 | 消息整理 | 个人待办 | 审批填写 |
 | --- | --- | --- |
 | 指定 QQ 群、成员或好友，按稳定账号标识过滤 | 合并同一事务的多条通知，保留或忽略候选 | 读取腾讯表格，定位本人行，准备单元格修改计划 |
@@ -77,9 +96,9 @@
 | --- | --- |
 | Android | Kotlin / Jetpack Compose，Keystore 加密设备令牌，查看、补充、审批 |
 | 桌面 | React / TypeScript / Vite，Tauri 2 Windows 壳使用 Credential Manager |
-| 主机 | Node.js 24+ / SQLite / Playwright，消息处理、计划、执行与核对 |
+| 主机 | Node.js 24 / SQLite FTS5 / Playwright，消息处理、资料检索、研究编排和填表执行 |
 | 私网 | Tailscale Serve HTTPS + Android 用户态 tsnet，独立业务设备配对 |
-| 模型与附件 | DeepSeek 负责分析与摘要；PDF / DOCX 提取，Tesseract 本地图片 OCR |
+| 模型与附件 | 配置文件管理 Chat Completions 兼容模型；PDF / DOCX 提取，Tesseract 本地图片与扫描页 OCR |
 
 手机不直接操作 QQ 或文档浏览器。主机服务与网关只监听回环地址，手机通过私网访问；Android 内嵌传输不占系统 `VpnService`，已在一台保留原 VPN 的手机上验证连接。
 
@@ -89,7 +108,11 @@
 flowchart LR
     Q[QQ 指定来源] --> H[主机入库与分析]
     H --> T[合并待办候选]
-    T --> K[手机保留 / 忽略]
+    T --> K[桌面或手机保留待办]
+    K -->|批准纳入来源| L[本地知识库]
+    D[导入资料] --> L
+    L --> R[本机检索与原文引用]
+    R -->|资料获模型授权| S[普通问答或 Deeper Research]
     H --> P[只读准备填写计划]
     P --> A[手机或桌面核对审批]
     A --> W[主机写前复核与填写]
@@ -102,7 +125,7 @@ flowchart LR
 
 ### 环境要求
 
-- 后端：Node.js **24+**、npm；真实腾讯表格执行使用已安装的 Microsoft Edge。
+- 后端使用 Node.js 24 和 npm。桌面知识库的固定验证版本为 **Node.js 24.22.2 / SQLite 3.53.4**。真实腾讯表格执行使用已安装的 Microsoft Edge。
 - 桌面 Web：根目录和 `desktop/` 各自的 npm 依赖。构建 Tauri 壳另需 Rust MSVC 工具链和 WebView2。
 - Android：JDK 21、Android SDK 36；内嵌传输重建另需 Go 工具链及 NDK，版本见构建脚本和 `mobile/tsnet-probe/go/go.mod`。
 - 真实业务：自行配置 QQ / NapCat、腾讯文档专用登录会话、本人资料和 DeepSeek API 访问。手机私网连接另需 Tailscale 配置与设备配对。
@@ -121,6 +144,16 @@ npm run desktop:build
 ```
 
 前两条按锁文件安装后端和桌面依赖；`npm test` 运行后端测试，最后一条检查桌面 TypeScript 并生成 Web 构建。`npm ci` 会重建对应目录的 `node_modules`，不初始化真实账号，不填写在线表格。
+
+### 使用桌面知识库与研究
+
+先按 [知识库配置与导入步骤](docs/setup.md#桌面知识库) 准备本机数据库、固定运行时和资料。已配置的 Windows 主机可运行以下命令启动知识库服务，`-CopyDesktopToken` 会把首次连接用的独立令牌复制到剪贴板。
+
+```powershell
+.\tools\start-assistant.ps1 -CopyDesktopToken
+```
+
+保持服务窗口运行。在课桌侧栏打开「个人知识库」，首次粘贴令牌并连接。可以直接本机检索；使用模型问答或研究前，在资料列表审批模型处理权限。需要同时启用 QQ 与填表工作者时，参阅 [合并启动说明](docs/setup.md#桌面知识库)。
 
 ### 配置真实业务后启动
 
@@ -157,19 +190,20 @@ npm run desktop:dev
 ## 验证与限制
 
 - 当前是单用户、单主机的 Windows 开发原型；文档填写已实现腾讯表格，金山/WPS、飞书和微信接入尚未实现。
+- Deeper Research 当前使用获授权的知识库片段。模型协作、预算控制和窗口重连已用合成资料验证；联网取证和不同 effort 的效果对比处于后续阶段。
 - 手机通知依赖后台轮询，进程被清理后的恢复和全天可靠性仍待完善。
 - 复杂表格、部署范围与恢复能力仍有边界，见 [详细验证与限制](docs/validation-and-data.md)。
 
 ## 数据与凭据
 
 - 账号、资料、附件和会话保存在本机 `.private/`，不随源码提供；密钥和平台登录需自行配置。
-- 分析与摘要会将必要内容发送到 DeepSeek；图片 OCR 在本机执行。
+- 图片和扫描页 OCR 在本机执行。知识库在获得文件或目录的模型处理授权后，才会把相关片段发送到所选模型；原有消息分析、填表字段映射和早报仍按各自配置使用模型。
 - GitHub 不备份被忽略的私人数据，需单独保存；详见 [数据与凭据说明](docs/validation-and-data.md#数据与凭据)。
 
 ## 目录与文档
 
 ```text
-src/                    主机 API、任务、消息处理和文档执行
+src/                    主机 API、知识库、研究编排、消息与填表
 mobile/android/         Android 原生客户端与测试
 mobile/tsnet-probe/go/   共享用户态私网桥接库源码
 desktop/                Web 工作台和 Tauri 壳
