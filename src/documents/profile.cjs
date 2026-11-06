@@ -1,5 +1,6 @@
 const { createHash } = require('node:crypto');
 const { createJobRepository } = require('../db/repositories/jobs.cjs');
+const { transaction } = require('../db/transaction.cjs');
 
 const baseKeys = ['name', 'student_id', 'sex', 'age'];
 const validKey = key => typeof key === 'string' && /^[a-z][a-z0-9_]{0,49}$/i.test(key) &&
@@ -40,19 +41,6 @@ function enabled(db) {
 function planCurrent(plan, values, answers, requireFingerprint) {
   if (!plan.profileFingerprint) return !requireFingerprint;
   return plan.profileFingerprint === fingerprint(plan, values, answers);
-}
-
-function transaction(db, work) {
-  if (db.isTransaction) return work();
-  db.exec('BEGIN IMMEDIATE');
-  try {
-    const result = work();
-    db.exec('COMMIT');
-    return result;
-  } catch (error) {
-    db.exec('ROLLBACK');
-    throw error;
-  }
 }
 
 function invalidateTask(db, taskId, planId) {

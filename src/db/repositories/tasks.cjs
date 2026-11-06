@@ -201,7 +201,7 @@ function createTaskRepository(db){
       return db.prepare('SELECT * FROM operations WHERE id=?').get(Number(operationId));
     },
     // 审批、操作入队和任务状态在同一个事务中完成；重复请求返回同一个操作。
-    approve({taskId,accountRef,planId,planVersion,planDigest,clientRequestId,actorDeviceId=null,createdAt=nowIso()}){
+    approve({taskId,accountRef,planId,planVersion,planDigest,clientRequestId,actorDeviceId=null,createdAt=nowIso(),onApproved=null}){
       db.exec('BEGIN IMMEDIATE');
       try{
         const task=getTask({id:taskId,accountRef});
@@ -242,6 +242,7 @@ function createTaskRepository(db){
         const approval=db.prepare('SELECT * FROM approvals WHERE id=?').get(Number(approvalInfo.lastInsertRowid));
         const operation=db.prepare('SELECT * FROM operations WHERE id=?').get(Number(operationInfo.lastInsertRowid));
         const current=getTask({id:task.id,accountRef});
+        if(onApproved)onApproved({task:current,operation});
         db.exec('COMMIT');
         return {created:true,task:current,approval,operation};
       }catch(error){

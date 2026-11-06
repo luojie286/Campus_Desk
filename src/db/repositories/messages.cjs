@@ -11,7 +11,8 @@ function createMessageRepository(db){
     },
     insert(message){
       const receivedAt=message.receivedAt||new Date().toISOString();
-      db.exec('BEGIN IMMEDIATE');
+      const ownTransaction=!db.isTransaction;
+      if(ownTransaction)db.exec('BEGIN IMMEDIATE');
       try{
         const result=db.prepare(`INSERT OR IGNORE INTO messages
           (platform,adapter_instance,account_ref,conversation_type,conversation_id,sender_id,
@@ -38,10 +39,10 @@ function createMessageRepository(db){
             .get(message.platform,message.accountRef,message.conversationType,message.conversationId,message.sourceMessageId);
           id=existing.id;
         }
-        db.exec('COMMIT');
+        if(ownTransaction)db.exec('COMMIT');
         return {id,inserted:result.changes===1};
       }catch(error){
-        db.exec('ROLLBACK');
+        if(ownTransaction)db.exec('ROLLBACK');
         throw error;
       }
     },

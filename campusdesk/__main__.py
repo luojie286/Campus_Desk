@@ -1,0 +1,108 @@
+"""本机操作者入口：Python 负责工作区，兼容桥调用现有解析与桌面后端。"""
+from __future__ import annotations
+
+import argparse
+from hashlib import file_digest
+import json
+import os
+from pathlib import Path
+import sqlite3
+import subprocess
+import sys
+
+from .workspace import WorkspaceError, apply_migration, bind_qq, migration_plan, set_history_access
+
+PROJECT = Path(__file__).resolve().parents[1]
+
+
+def node_entry(root: Path, script: str, *arguments: str) -> None:
+    executable = PROJECT / ".private" / "runtime" / "node-v24.22.2" / "node.exe"
+    if not executable.is_file():
+        raise WorkspaceError("verified_node_runtime_missing")
+    checksums = executable.with_name("SHASUMS256.txt").read_text(encoding="utf-8").splitlines()
+    expected = next((line.split()[0] for line in checksums if line.endswith("  win-x64/node.exe")), None)
+    with executable.open("rb") as stream:
+        if expected != file_digest(stream, "sha256").hexdigest():
+            raise WorkspaceError("node_runtime_checksum_mismatch")
+    result = subprocess.run([str(executable), str(PROJECT / script), *arguments], cwd=root, check=False)
+    if result.returncode:
+        raise WorkspaceError("compatibility_adapter_failed")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(prog="python -m campusdesk")
+    parser.add_argument("--root", type=Path, default=PROJECT, help="本机工作目录，默认项目根")
+    commands = parser.add_subparsers(dest="command", required=True)
+    init = commands.add_parser("init", help="初始化没有 QQ 账号的新工作区")
+    init.add_argument("--port", type=int, default=9087)
+    plan = commands.add_parser("migration-plan", help="核对旧库工作区迁移范围")
+    plan.add_argument("--legacy-account")
+    migrate = commands.add_parser("migrate", help="按摘要备份并迁移旧库")
+    migrate.add_argument("digest")
+    migrate.add_argument("--legacy-account")
+    history = commands.add_parser("history-access", help="调整已绑定账号的历史检索权限")
+    history.add_argument("account")
+    history.add_argument("state", choices=("allow", "revoke"))
+    bind = commands.add_parser("bind-qq", help="绑定本机配置中的当前 QQ 来源账号")
+    bind.add_argument("account")
+    ingest = commands.add_parser("import-notes", help="预览或批准本机资料导入")
+    ingest.add_argument("action", choices=("plan", "apply"))
+    ingest.add_argument("source")
+    ingest.add_argument("exclude")
+    ingest.add_argument("digest", nargs="?")
+    serve = commands.add_parser("serve", help="启动桌面知识库及明确选用的可选能力")
+    serve.add_argument("--copy-token", action="store_true")
+    serve.add_argument("--qq", action="store_true")
+    serve.add_argument("--sheets", action="store_true")
+    serve.add_argument("--briefings", action="store_true")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    root = args.root.resolve(strict=True)
+    if args.command == "init":
+        if not (root / ".private" / "poc.sqlite").exists():
+            node_entry(root, "tools/workspace-bootstrap.cjs", str(args.port))
+        plan = migration_plan(root)
+        if plan["workspace_id"]:
+            result = {"workspace_id": plan["workspace_id"], "initialized": False}
+        elif plan["bind_existing_account"] or plan["unmapped_records"] or any(plan["mapped_records"].values()):
+            raise WorkspaceError("review_workspace_migration_first")
+        else:
+            result = apply_migration(root, plan["digest"])
+    elif args.command == "migration-plan":
+        result = migration_plan(root, args.legacy_account)
+    elif args.command == "migrate":
+        result = apply_migration(root, args.digest, args.legacy_account)
+    elif args.command == "history-access":
+        result = set_history_access(root, "qq", args.account, args.state == "allow")
+    elif args.command == "bind-qq":
+        result = bind_qq(root, args.account)
+    elif args.command == "import-notes":
+        extra = [args.digest] if args.digest is not None else []
+        node_entry(root, "tools/import-notes.cjs", args.action, args.source, args.exclude, *extra)
+        return
+    else:
+        if root != PROJECT:
+            raise WorkspaceError("use_workspace_launcher_in_project_root")
+        flags = [name for flag, name in (
+            (args.copy_token, "-CopyDesktopToken"), (args.qq, "-WithQQ"),
+            (args.sheets, "-WithSheets"), (args.briefings, "-WithBriefings")
+        ) if flag]
+        status = subprocess.call(["powershell.exe", "-NoProfile", "-File",
+                                  str(PROJECT / "tools/start-assistant.ps1"), *flags], cwd=root,
+                                 env={**os.environ, "CAMPUS_DESK_PYTHON": sys.executable})
+        raise SystemExit(status)
+    print(json.dumps(result, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except WorkspaceError as error:
+        print(error, file=sys.stderr)
+        raise SystemExit(1)
+    except (OSError, ValueError, sqlite3.Error):
+        print("workspace_input_failed", file=sys.stderr)
+        raise SystemExit(1) from None

@@ -6,6 +6,7 @@ const { DatabaseSync } = require('node:sqlite');
 const { loadConfig } = require('../src/config.cjs');
 const { backupDatabase } = require('../src/db/backup.cjs');
 const { readAssistantConfig } = require('../src/assistant/api.cjs');
+const { resolveWorkspace } = require('../src/workspace/context.cjs');
 const { initialize, ready, createKnowledge } = require('../src/knowledge/repository.cjs');
 const { checkedAbsolute, readFile, resolveSource, relativeName, hash, within } = require('../src/knowledge/files.cjs');
 
@@ -47,11 +48,12 @@ async function main() {
   if (process.version !== 'v24.22.2') throw Error('verified_node_required');
   const privateRoot = checkedAbsolute(path.resolve('.private'));
   if (within(privateRoot, manifest.source) || within(manifest.source, privateRoot)) throw Error('outside_scope');
-  const config = loadConfig(path.join(privateRoot, 'config.json'), { allowUnconfigured: true });
-  if (!config.account_id) throw Error('account_not_configured');
+  loadConfig(path.join(privateRoot, 'config.json'), { allowUnconfigured: true });
   const dbPath = checkedAbsolute(path.join(privateRoot, 'poc.sqlite'));
   const db = new DatabaseSync(dbPath);
   try {
+    const workspace = resolveWorkspace(db);
+    if (!workspace) throw Error('workspace_not_initialized');
     if (db.prepare('SELECT max(version) AS version FROM schema_migrations').get().version !== 9) throw Error('unexpected_baseline_schema');
     if (db.prepare('PRAGMA quick_check').get().quick_check !== 'ok') throw Error('database_integrity_failed');
     if (!ready(db)) {
@@ -71,7 +73,7 @@ async function main() {
     const configFile = path.join(privateRoot, 'assistant.config.json');
     const settings = readAssistantConfig(configFile);
     const trashRoot = settings?.trashRoot ? checkedAbsolute(settings.trashRoot) : undefined;
-    const knowledge = createKnowledge({ db, owner: String(config.account_id), storage, trashRoot, languagePath: path.join(privateRoot, 'ocr') });
+    const knowledge = createKnowledge({ db, owner: workspace.id, workspace, storage, trashRoot, languagePath: path.join(privateRoot, 'ocr') });
     function confirm(preview) {
       const result = knowledge.decide(preview.id, { decision: 'approve', digest: preview.digest, clientRequestId: randomUUID() });
       if (result.state !== 'committed') throw Error(result.code || 'migration_conflict');
@@ -96,7 +98,7 @@ async function main() {
     let totalChunks = 0;
     let emptyDocuments = 0;
     for (const item of manifest.entries) {
-      const active = lookup.get(String(config.account_id), root.id, item.name);
+      const active = lookup.get(workspace.id, root.id, item.name);
       if (!active || active.digest !== item.digest) throw Error('migration_verification_failed');
       const copy = readFile(path.join(storage, ...relativeName(active.blob).split('/')));
       if (copy.digest !== item.digest) throw Error('migration_verification_failed');

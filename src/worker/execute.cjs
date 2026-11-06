@@ -10,6 +10,7 @@ async function processNextExecuteJob({
   workerId,
   now=new Date().toISOString(),
   fields,
+  allowedTask=()=>true,
   createSheet
 }){
   const job=jobs.claim({workerId,leaseSeconds:300,now,type:'execute_operation'});
@@ -24,6 +25,10 @@ async function processNextExecuteJob({
     if(!Number.isInteger(taskId)||!Number.isInteger(operationId)||!accountRef)throw Error('task_reference_invalid');
     task=tasks.get({id:taskId,accountRef});
     if(!task)throw Error('task_not_found');
+    if(!allowedTask(task)){
+      jobs.complete(job.id,now);
+      return {processed:true,jobId:job.id,skipped:true,error:'outside_scope'};
+    }
     // 已取消/已完成的任务不执行；陈旧 job 直接结束。
     if(task.state!=='approved'){
       jobs.complete(job.id,now);

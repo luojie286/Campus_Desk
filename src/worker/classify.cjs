@@ -7,7 +7,7 @@ function conversationDedupeKey({accountRef,conversationType,conversationId}){
   return `suggest:${accountRef}:${conversationType}:${conversationId}`;
 }
 
-async function processNextClassifyJob({messages,suggestions,jobs,classifications,tasks,config,workerId,now=new Date().toISOString()}){
+async function processNextClassifyJob({messages,suggestions,jobs,classifications,tasks,prepareFromMessage,config,workerId,now=new Date().toISOString()}){
   const job=jobs.claim({workerId,leaseSeconds:60,now,type:'classify_message'});
   if(!job)return {processed:false};
   try{
@@ -36,8 +36,13 @@ async function processNextClassifyJob({messages,suggestions,jobs,classifications
     const createdTasks=[];
     let suggestionId=null;
     if(supportedLinks.length){
-      if(!tasks)throw Error('task_repository_required');
+      if(!tasks&&!prepareFromMessage)throw Error('task_repository_required');
       for(const target of supportedLinks){
+        if(prepareFromMessage){
+          const task=prepareFromMessage(message,target,now);
+          if(task)createdTasks.push(task);
+          continue;
+        }
         const task=tasks.create({
           todoId:null,
           requestKey:'message:'+message.id+':'+target,

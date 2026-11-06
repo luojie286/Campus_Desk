@@ -2,7 +2,7 @@ const fs=require('node:fs');
 const http=require('node:http');
 const crypto=require('node:crypto');
 const path=require('node:path');
-const {openStore,extractLinks,eventKey,canonicalUrl,findHeaderRowByContent,buildGeneralPlan,assertWritePreconditions,approvalCheck,digest,placeholderIsPresent,reservationCellEmpty,runBelongsToAccount}=require('./core.cjs');
+const {openStore,canonicalUrl,findHeaderRowByContent,buildGeneralPlan,assertWritePreconditions,approvalCheck,digest,placeholderIsPresent,reservationCellEmpty,runBelongsToAccount}=require('./core.cjs');
 const {TencentSheet,column}=require('./tencent.cjs');
 const {resolveIdentity}=require('./documents/identity.cjs');
 const {prepareColumnAnalysis,analyzeColumns}=require('./llm.cjs');
@@ -18,7 +18,7 @@ const {createFileRepository}=require('./db/repositories/files.cjs');
 const {createSourceRepository}=require('./db/repositories/sources.cjs');
 const {createNotificationRepository}=require('./db/repositories/notifications.cjs');
 const contacts=require('./contacts/onebot.cjs');
-const {ingestEvent}=require('./intake/onebot.cjs');
+const {createMessageService}=require('./messages/service.cjs');
 const {processNextClassifyJob}=require('./worker/classify.cjs');
 const {processNextPrepareJob}=require('./worker/prepare.cjs');
 const {processNextExecuteJob}=require('./worker/execute.cjs');
@@ -32,6 +32,8 @@ const {createV2Handler}=require('./api/v2.cjs');
 const {createBriefingRepository}=require('./briefings/repository.cjs');
 const {processBriefing}=require('./briefings/worker.cjs');
 const {PREFIX:assistantPrefix,startAssistant}=require('./assistant/api.cjs');
+const {createSheetService}=require('./sheets/service.cjs');
+const {resolveWorkspace,accountHasHistory}=require('./workspace/context.cjs');
 const profiles=require('./documents/profile.cjs');
 fs.mkdirSync('.private',{recursive:true});
 const configPath='.private/config.json';
@@ -108,7 +110,7 @@ async function reconcileGeneralRun(run){
 }
 async function processRun(run){
   // 旧账号未完成的记录保留，但不允许新账号执行或核对其写入。
-  if(!runBelongsToAccount(run,config.account_id))return;
+  if(!runBelongsToAccount(run,config.account_id)||!accountHasHistory(store.db,config.account_id))return;
   if(run.state==='outcome_unknown'){await reconcileGeneralRun(run);return;}
   if(run.state!=='received')return;
   await prepareGeneralRun(run);
@@ -116,7 +118,7 @@ async function processRun(run){
 // 上层批准后写入：状态、摘要、execute 开关和串行执行器由调用方共同保证。
 async function approveRun(run,expectedDigest){
   // 旧账号或手动记录不能通过 HTTP 审批写入。
-  if(!runBelongsToAccount(run,config.account_id))throw Error('account_mismatch');
+  if(!runBelongsToAccount(run,config.account_id)||!accountHasHistory(store.db,config.account_id))throw Error('account_mismatch');
   const plan=run.plan?JSON.parse(run.plan):null;
   if(!plan)throw Error('plan_missing');
   approvalCheck({state:run.state,digest:digest(plan),expectedDigest,execute:config.execute,busy:false});
@@ -152,7 +154,7 @@ async function drain(){
 }
 // 分类/候选 worker 只处理消息和候选，不打开浏览器；每个 tick 最多处理三条。
 const workerId='serve-'+process.pid;
-async function drainClassifyJobs(){
+async function drainClassifyJobs(sheets){
   if(!config.messageCenter)return;
   for(let i=0;i<3;i++){
     const result=await processNextClassifyJob({
@@ -161,6 +163,7 @@ async function drainClassifyJobs(){
       jobs:jobsRepo,
       classifications:classificationsRepo,
       tasks:tasksRepo,
+      prepareFromMessage:sheets.prepareFromMessage,
       config,
       workerId,
       now:new Date().toISOString()
@@ -205,11 +208,11 @@ async function drainFileJobs(){
   }
 }
 // 文档任务准备只读表格并生成审批计划；执行写入仍由后续审批 worker 负责。
-async function drainPrepareJobs(){
-  if(!config.messageCenter)return;
+async function drainPrepareJobs(sheets){
   for(let i=0;i<2;i++){
     const result=await processNextPrepareJob({
       tasks:tasksRepo,
+      allowedTask:sheets.allowedTask,
       jobs:jobsRepo,
       config,
       workerId,
@@ -223,11 +226,11 @@ async function drainPrepareJobs(){
   }
 }
 // 审批后的写入只处理 execute_operation；写入异常由 worker 自己进入 outcome_unknown。
-async function drainExecuteJobs(){
-  if(!config.messageCenter)return;
+async function drainExecuteJobs(sheets){
   for(let i=0;i<1;i++){
     const result=await processNextExecuteJob({
       tasks:tasksRepo,
+      allowedTask:sheets.allowedTask,
       jobs:jobsRepo,
       config,
       workerId,
@@ -239,11 +242,11 @@ async function drainExecuteJobs(){
   }
 }
 // v2 结果未知任务的只读核对；与 legacy 的 `poc.cjs reconcile` 命令互不影响。
-async function drainReconcileJobs(){
-  if(!config.messageCenter)return;
+async function drainReconcileJobs(sheets){
   for(let i=0;i<1;i++){
     const result=await processNextReconcileJob({
       tasks:tasksRepo,
+      allowedTask:sheets.allowedTask,
       jobs:jobsRepo,
       config,
       workerId,
@@ -253,34 +256,7 @@ async function drainReconcileJobs(){
     if(!result.processed)break;
   }
 }
-function acceptEvent(e){
-  const accountRef=config.account_id?String(config.account_id):'';
-  const matched=sourcesRepo.matchEvent(e,{accountRef});
-  if(!matched){
-    const configured=sourcesRepo.list({accountRef}).length>0;
-    return {accepted:0,reason:configured?'source_filtered':'source_not_configured'};
-  }
-  const source=sourcesRepo.toLegacySource(matched);
-  // 消息中心开启时先保存原文并排队分类/候选；这一步不打开浏览器。
-  let ingested=null;
-  if(config.messageCenter){
-    ingested=ingestEvent({event:e,config,messages:messagesRepo,jobs:jobsRepo,files:filesRepo,source});
-    if(ingested.reason==='source_filtered')return {accepted:0,reason:'source_filtered'};
-    if(ingested.reason==='missing_stable_id')return {accepted:0,reason:'missing_stable_id'};
-  }
-  // legacy 管道保留现有自动填表行为；v2 管道只存消息和候选，等用户确认待办。
-  let accepted=0;
-  if(config.pipeline!=='v2'){
-    const key=eventKey(e);
-    for(const url of extractLinks(e))accepted+=Number(store.enqueue(key,url));
-  }
-  return {
-    accepted,
-    stored:ingested?!!ingested.stored:null,
-    messageId:ingested?.messageId??null,
-    duplicate:ingested?!!ingested.duplicate:null
-  };
-}
+const {ingestMessage:acceptEvent}=createMessageService({store,config,sources:sourcesRepo,messages:messagesRepo,jobs:jobsRepo,files:filesRepo});
 // 手动/LLM 写入也留一条 runs 记录；source_key 以 manual: 开头，
 // 后台 serve 不会自动重试它，结果不明时必须人工回读。
 function startManualRun(url,plan){
@@ -504,16 +480,19 @@ async function main(){
     const self=await api('get_login_info',{});
     const history=await api('get_friend_msg_history',{user_id:Number(config.source.id),count:20});
     if(!Array.isArray(history.messages))throw Error('unexpected_history_shape');
-    let accepted=0;
+    let accepted=0,stored=0,duplicates=0;
     for(const e of history.messages){
       // 保留平台真实 ID、正文与时间；来源明确标为历史拉取，不冒充实时回调。
       if(String(e.user_id??e.sender?.user_id)!==config.source.id)continue;
-      accepted+=acceptEvent({...e,post_type:'message',message_type:'private',self_id:self.user_id,user_id:e.user_id??e.sender?.user_id}).accepted;
+      const result=await acceptEvent({...e,post_type:'message',message_type:'private',self_id:self.user_id,user_id:e.user_id??e.sender?.user_id});
+      accepted+=result.accepted;
+      if(result.stored)stored++;
+      if(result.duplicate)duplicates++;
     }
-    const proof={method:'actual_qq_history_api',checkedAt:new Date().toISOString(),fetched:history.messages.length,accepted};
+    const proof={method:'actual_qq_history_api',checkedAt:new Date().toISOString(),fetched:history.messages.length,accepted,stored,duplicates};
     fs.writeFileSync('.private/history-proof.json',JSON.stringify(proof,null,2));
     fs.appendFileSync('.private/history-proof.jsonl',JSON.stringify(proof)+'\n');
-    await drain();console.log(JSON.stringify({method:'actual_qq_history_api',fetched:history.messages.length,accepted,runs:store.summary()},null,2));
+    await drain();console.log(JSON.stringify({...proof,runs:store.summary()},null,2));
   }
   else if(command==='reconcile'){
     for(const run of store.db.prepare("SELECT * FROM runs WHERE state='outcome_unknown'").all())await processRun(run);console.log(JSON.stringify(store.summary(),null,2));
@@ -542,21 +521,27 @@ async function main(){
     console.log(JSON.stringify({stage:'backup_complete',target,size:manifest.size,sha256:manifest.sha256,integrity:manifest.integrity},null,2));
   }
   else if(command==='serve'||command==='serve-assistant'){
-    const assistantOnly=command==='serve-assistant';
-    const assistant=startAssistant({db:store.db,owner:String(config.account_id||''),port:config.port,oldToken:config.token});
-    if(assistantOnly&&!assistant)throw Error('assistant_unavailable');
-    if(!assistantOnly){
-      store.recover();
+    const combined=command==='serve';
+    const qqEnabled=combined||process.argv.includes('--qq');
+    const sheetsEnabled=combined||process.argv.includes('--sheets');
+    const briefingsEnabled=combined||process.argv.includes('--briefings');
+    const assistantOnly=!qqEnabled&&!sheetsEnabled&&!briefingsEnabled;
+    const sheets=createSheetService({db:store.db,tasks:tasksRepo,jobs:jobsRepo,workspace:resolveWorkspace(store.db),
+      enabled:sheetsEnabled,execute:config.execute});
+    const assistant=startAssistant({db:store.db,port:config.port,oldToken:config.token,sheets});
+    if(!combined&&!assistant)throw Error('assistant_unavailable');
+    if(sheetsEnabled)store.recover();
+    if(qqEnabled||sheetsEnabled){
       jobsRepo.recoverExpired(new Date().toISOString());
     }
     const accountRef=config.account_id?String(config.account_id):'';
-    if(!assistantOnly&&accountRef&&sourcesRepo.list({accountRef}).length===0){
+    if(qqEnabled&&accountRef&&sourcesRepo.list({accountRef}).length===0){
       sourcesRepo.seedFromConfig({accountRef,source:config.source,displayName:config.source_name||null});
     }
-    if(!assistantOnly&&accountRef)messagesRepo.backfillNames({accountRef});
+    if(qqEnabled&&accountRef)messagesRepo.backfillNames({accountRef});
     const setupNonce=crypto.randomBytes(20).toString('hex');
     const setupBase='/setup/'+setupNonce;
-    if(!assistantOnly)fs.writeFileSync('.private/setup-url.txt','http://127.0.0.1:'+config.port+setupBase);
+    if(qqEnabled)fs.writeFileSync('.private/setup-url.txt','http://127.0.0.1:'+config.port+setupBase);
     const server=http.createServer(async(req,res)=>{
       res.setHeader('Content-Type','application/json');
       // Tauri 2 的 WebView 与开发浏览器需要明确允许的本机来源；令牌仍然必需。
@@ -570,16 +555,17 @@ async function main(){
       }
       if(req.method==='OPTIONS'){res.statusCode=204;res.end();return;}
       const respond=(status,data)=>{res.statusCode=status;res.end(JSON.stringify(data));};
-      if(!assistantOnly&&req.method==='GET'&&req.url?.split('?')[0]===setupBase+'/qr.png'){
+      if(qqEnabled&&req.method==='GET'&&req.url?.split('?')[0]===setupBase+'/qr.png'){
         const qr='.private/vendor/napcat-4.18.41/cache/qrcode.png';
         if(!fs.existsSync(qr))return respond(404,{error:'qr_not_ready'});
         res.setHeader('Cache-Control','no-store');res.setHeader('Content-Type','image/png');res.end(fs.readFileSync(qr));return;
       }
-      if(!assistantOnly&&req.method==='GET'&&req.url===setupBase){
+      if(qqEnabled&&req.method==='GET'&&req.url===setupBase){
         res.setHeader('Content-Type','text/html; charset=utf-8');res.setHeader('Cache-Control','no-store');
         res.end(`<!doctype html><meta charset="utf-8"><title>QQ 后台登录</title><h2>手机 QQ 扫码登录后台适配器</h2><p>此二维码每三秒刷新显示；请扫码并在手机确认。</p><img id="qr" width="300" height="300" src="${setupBase}/qr.png"><p>这是本机后台适配器的二维码。腾讯文档需在专用 Edge 中另行登录。</p><script>setInterval(()=>document.getElementById('qr').src='${setupBase}/qr.png?t='+Date.now(),3000)</script>`);return;
       }
-      if(req.method==='GET'&&req.url==='/health')return respond(200,{running:true,sourceConfigured:!!config.source.id,busy});
+      if(req.method==='GET'&&req.url==='/health')return respond(200,{running:true,sourceConfigured:!!config.source.id,busy,
+        capabilities:{knowledge:!!assistant,qq:qqEnabled,sheets:sheetsEnabled,briefings:briefingsEnabled}});
       const requestUrl=new URL(req.url||'/','http://127.0.0.1');
       const pathname=requestUrl.pathname;
       if(pathname===assistantPrefix||pathname.startsWith(assistantPrefix+'/')){
@@ -587,6 +573,14 @@ async function main(){
         return assistant(req,res,requestUrl);
       }
       if(assistantOnly)return respond(404,{error:'not_found'});
+      if(pathname.startsWith('/v1/')&&apiAuthorized(req)&&!accountHasHistory(store.db,config.account_id)){
+        return respond(403,{error:'workspace_source_unavailable'});
+      }
+      if((!qqEnabled&&pathname.startsWith('/v1/contacts/'))||
+        (!sheetsEnabled&&req.method!=='GET'&&(pathname.startsWith('/v1/tasks/')||pathname.startsWith('/v1/runs/')))||
+        (!briefingsEnabled&&req.method!=='GET'&&pathname.startsWith('/v1/brief'))){
+        return respond(503,{error:'capability_disabled'});
+      }
       if(pathname.startsWith('/v1/brief')||pathname.startsWith('/v1/messages')||pathname.startsWith('/v1/suggestions')||pathname.startsWith('/v1/todos')||pathname.startsWith('/v1/tasks')||pathname==='/v1/sources'||pathname.startsWith('/v1/listen-sources')||pathname.startsWith('/v1/notifications')||pathname.startsWith('/v1/contacts/')){
         const handled=await v2Handler(req,res,pathname,requestUrl.searchParams);
         if(handled)return;
@@ -594,7 +588,10 @@ async function main(){
       if(pathname.startsWith('/v1/')){
         if(!apiAuthorized(req))return respond(401,{error:'unauthorized'});
         if(req.method==='GET'&&pathname==='/v1/runs'){
-          const runs=store.db.prepare("SELECT id,state,url,error,updated_at FROM runs ORDER BY id DESC LIMIT 50").all();
+          const prefix=String(config.account_id||'')+':';
+          const runs=resolveWorkspace(store.db)
+            ?store.db.prepare("SELECT id,state,url,error,updated_at FROM runs WHERE substr(source_key,1,length(?))=? ORDER BY id DESC LIMIT 50").all(prefix,prefix)
+            :store.db.prepare("SELECT id,state,url,error,updated_at FROM runs ORDER BY id DESC LIMIT 50").all();
           return respond(200,{runs});
         }
         const match=pathname.match(/^\/v1\/runs\/(\d+)(?:\/(approve|reanalyze))?$/);
@@ -602,6 +599,7 @@ async function main(){
         const id=Number(match[1]),action=match[2]||null;
         const run=store.get(id);
         if(!run)return respond(404,{error:'run_not_found'});
+        if(resolveWorkspace(store.db)&&!runBelongsToAccount(run,config.account_id))return respond(404,{error:'run_not_found'});
         if(req.method==='GET'&&!action)return respond(200,runPreview(run));
         if(req.method==='POST'&&action==='reanalyze'){
           if(!runBelongsToAccount(run,config.account_id))return respond(403,{error:'account_mismatch'});
@@ -627,27 +625,40 @@ async function main(){
         }
         return respond(405,{error:'method_not_allowed'});
       }
-      if(req.method!=='POST'||req.url!=='/onebot')return respond(404,{error:'not_found'});
+      if(!qqEnabled||req.method!=='POST'||req.url!=='/onebot')return respond(404,{error:'not_found'});
       let chunks=[],length=0;
       for await(const chunk of req){length+=chunk.length;if(length>262144){respond(413,{error:'event_too_large'});req.destroy();return;}chunks.push(chunk);}
       const body=Buffer.concat(chunks);
       const signature='sha1='+crypto.createHmac('sha1',config.token).update(body).digest('hex');
       const auth=req.headers.authorization==='Bearer '+config.token || req.headers['x-signature']===signature;
       if(!auth)return respond(401,{error:'unauthorized'});
-      try{const result=acceptEvent(JSON.parse(body));respond(200,result);setImmediate(()=>drain().catch(()=>{}));}catch{return respond(400,{error:'invalid_event'});}
+      let event;
+      try{event=JSON.parse(body);if(!event||typeof event!=='object'||Array.isArray(event))throw Error();}
+      catch{return respond(400,{error:'invalid_event'});}
+      try{
+        const result=await acceptEvent(event);
+        respond(200,result);
+        if(sheetsEnabled)setImmediate(()=>drain().catch(()=>{}));
+      }catch(error){
+        return respond(error.status||503,{error:error.status?error.message:'message_ingest_failed'});
+      }
     });
     server.listen(config.port,'127.0.0.1',()=>console.log('Listening on http://127.0.0.1:'+config.port+(assistantOnly?'; assistant only':'; POST /onebot')));
     if(assistantOnly)return;
-    setInterval(()=>drain().catch(()=>{}),2000).unref();
-    drainBriefing().catch(()=>{});
-    setInterval(()=>drainBriefing().catch(()=>{}),30000).unref();
-    if(config.messageCenter){
-      setInterval(()=>drainClassifyJobs().catch(()=>{}),2000).unref();
+    if(sheetsEnabled)setInterval(()=>drain().catch(()=>{}),2000).unref();
+    if(briefingsEnabled){
+      drainBriefing().catch(()=>{});
+      setInterval(()=>drainBriefing().catch(()=>{}),30000).unref();
+    }
+    if(config.messageCenter&&qqEnabled){
+      setInterval(()=>drainClassifyJobs(sheets).catch(()=>{}),2000).unref();
       setInterval(()=>drainConversationJobs().catch(()=>{}),2000).unref();
       setInterval(()=>drainFileJobs().catch(()=>{}),2000).unref();
-      setInterval(()=>drainPrepareJobs().catch(()=>{}),2000).unref();
-      setInterval(()=>drainExecuteJobs().catch(()=>{}),2000).unref();
-      setInterval(()=>drainReconcileJobs().catch(()=>{}),2000).unref();
+    }
+    if(sheetsEnabled&&(config.messageCenter||!combined)){
+      setInterval(()=>drainPrepareJobs(sheets).catch(()=>{}),2000).unref();
+      setInterval(()=>drainExecuteJobs(sheets).catch(()=>{}),2000).unref();
+      setInterval(()=>drainReconcileJobs(sheets).catch(()=>{}),2000).unref();
     }
   } else throw Error('unknown_command');
 }

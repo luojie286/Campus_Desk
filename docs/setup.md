@@ -66,42 +66,49 @@ npm run desktop:dev
 
 ## 桌面知识库
 
-知识库复用主机配置中的当前账号和本机 SQLite。先按上文初始化主机并填好 `account_id`。首次导入和知识库启动脚本使用固定的 Windows x64 Node.js 24.22.2。将发布包中的 `node.exe` 和官方 `SHASUMS256.txt` 放在 `.private/runtime/node-v24.22.2/`，按清单中的 `win-x64/node.exe` 核对 SHA-256，再运行。启动脚本也会校验该文件。 [Node.js 发布目录](https://nodejs.org/dist/v24.22.2/)
+知识库归属本机工作区。日常入口使用 Python 3.11+，现有桌面后端和解析器通过固定的 Windows x64 Node.js 24.22.2 运行。将发布包中的 `node.exe` 和官方 `SHASUMS256.txt` 放在 `.private/runtime/node-v24.22.2/`。Python 入口与启动脚本会按清单校验运行时。 [Node.js 发布目录](https://nodejs.org/dist/v24.22.2/)
+
+新环境在仓库根目录运行 `python -m campusdesk init`。它创建本机配置、SQLite 和默认工作区，之后可直接导入资料。已有知识库应先停止主机，运行 `python -m campusdesk migration-plan` 核对记录数与摘要，再用 `python -m campusdesk migrate '<digest>'` 创建一致性备份并执行迁移。未确定归属的旧记录仍保留在原账号范围。
 
 ### 首次导入
 
 在仓库根目录运行以下命令。将 `C:\Notes` 换成你授权的实际目录，将 `archive` 换成想排除的子目录。填入一个不存在的子目录名可保留目录内所有支持的文字资料。入口路径若经过 Windows 目录联接，应填写解析后的实际目录。
 
 ```powershell
-$kbNode = '.\.private\runtime\node-v24.22.2\node.exe'
 $notes = 'C:\Notes'
 $exclude = 'archive'
-& $kbNode tools/import-notes.cjs plan $notes $exclude
+python -m campusdesk import-notes plan $notes $exclude
 ```
 
 `plan` 只读取目录中的 Markdown、TXT、DOCX 和 PDF，输出数量、字节数与清单摘要。核对范围后，将下面的占位符替换为返回的 `digest`。`apply` 校验清单摘要，首次为原数据库创建备份，再保存本机副本和索引，并创建缺失的 `.private/assistant.config.json`。原始文件保留在源目录。图片可在桌面知识库的导入预览中单独批准。
 
 ```powershell
-& $kbNode tools/import-notes.cjs apply $notes $exclude '<digest>'
+python -m campusdesk import-notes apply $notes $exclude '<digest>'
 ```
 
-已有知识库 schema 1 的主机可在服务停止后运行 `& $kbNode tools/upgrade-assistant.cjs`。它先备份数据库，再升级到 schema 2，保留现有资料。
+已有知识库 schema 1 的主机可在服务停止后先用固定运行时执行 `tools/upgrade-assistant.cjs`，备份并升级到 schema 2，再按上文迁移工作区。
 
 ### 连接、问答和研究
 
 ```powershell
-.\tools\start-assistant.ps1 -CopyDesktopToken
+python -m campusdesk serve --copy-token
 ```
 
-该命令启动本机知识库服务，并将独立令牌复制到剪贴板。保持终端打开，在课桌侧栏选择「个人知识库」，粘贴令牌并连接。Windows 桌面客户端会把令牌保存到 Credential Manager。下次连接可省略 `-CopyDesktopToken`。
+该命令启动本机知识库服务，并将独立令牌复制到剪贴板。保持终端打开，在课桌侧栏选择「个人知识库」，粘贴令牌并连接。Windows 桌面客户端会把令牌保存到 Credential Manager。下次连接可省略 `--copy-token`。
 
-可选模型在 `.private/assistant.config.json` 中配置。首次导入生成 DeepSeek 示例，凭证从启动终端的 `DEEPSEEK_API_KEY` 读取。先在资料列表批准模型处理权限，再开启模型问答或进入 Deeper Research。研究报告与过程保存使用写入预览审批，关窗后可重新连接查看主机中的进度。
+可选模型在 `.private/assistant.config.json` 中配置。新工作区从空模型列表开始。模型项填写 `id`、`label`、`adapter`（`chat-completions`）、`base_url`、`model` 和 `credential_env`，凭证从启动终端指定的环境变量读取。先在资料列表批准模型处理权限，再开启模型问答或进入 Deeper Research。研究报告与过程保存使用写入预览审批，关窗后可重新连接查看主机中的进度。
 
-需要同时运行消息、待办和填表功能时，在同一端口的服务停止后使用以下命令。`-WithLegacy` 启用原有工作者，并沿用当前的执行开关和获批任务队列。
+QQ 账号配置完成后，可用 `python -m campusdesk bind-qq '<当前配置账号>'` 将来源绑定到工作区。迁移时已确认的旧账号会自动绑定。启动可分别添加 `--qq`、`--sheets`、`--briefings`。启用填表时沿用当前的执行开关与获批任务队列。
 
 ```powershell
-.\tools\start-assistant.ps1 -WithLegacy
+python -m campusdesk serve --qq --sheets
 ```
+
+省略 `--qq` 时，原始消息的获授权历史仍可查询。若要撤销历史查询权限，停服后执行 `python -m campusdesk history-access '<已绑定账号>' revoke`，它保留原始消息并改变后续的工作区可见性。
+
+只需要桌面知识库和手工填表时，运行 `python -m campusdesk serve --sheets`。在知识库的「工作区填表」粘贴腾讯表格链接，提交只读准备。计划生成后可检查目标、原值和拟填值，再批准执行。`execute=false` 时可以准备和查看，执行需要相应开关、文档权限及用户审批。
+
+普通问答可选「允许模型调用本轮授权的查询与准备工具」。查询只返回本轮范围内、已获模型授权的证据。若启用了填表能力，可以填写本轮允许准备的一个表格链接。工具返回的是待准备任务；填写仍走同一份人工审批。工具用例的模型调用、超时和上下文均有上限。
 
 ## 手机私网连接
 

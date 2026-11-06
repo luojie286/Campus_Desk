@@ -1,5 +1,6 @@
 // 消息中心/待办候选 API：所有查询都按当前账号隔离，不返回 raw_json。
 // 这一层只做读取、候选接受/忽略和待办创建；不会触发文档读写。
+const {queueApprovedPlan}=require('../sheets/service.cjs');
 function send(res,status,data){
   res.statusCode=status;
   res.setHeader('Content-Type','application/json');
@@ -419,7 +420,7 @@ function createV2Handler({messages,suggestions,tasks,jobs,files,sources,notifica
           if(config.execute!==true)throw Error('execute_disabled');
           const body=await readJson(req);
           if(!body.plan_id||!body.plan_version||!body.plan_digest||!body.client_request_id)throw Error('invalid_body');
-          const result=tasks.approve({
+          const result=queueApprovedPlan(tasks,jobs,{
             taskId,
             accountRef,
             planId:body.plan_id,
@@ -427,12 +428,6 @@ function createV2Handler({messages,suggestions,tasks,jobs,files,sources,notifica
             planDigest:body.plan_digest,
             clientRequestId:body.client_request_id,
             actorDeviceId:body.device_id||null
-          });
-          // 只有第一次审批才入队；重复请求返回同一个操作，不会重复执行。
-          if(result.created)jobs.enqueue({
-            type:'execute_operation',
-            payload:{taskId,accountRef,operationId:result.operation.id},
-            runAt:new Date().toISOString()
           });
           send(res,200,{task:mapTask(result.task),approval:result.approval,operation:result.operation});
           return true;
@@ -521,4 +516,4 @@ function createV2Handler({messages,suggestions,tasks,jobs,files,sources,notifica
   };
 }
 
-module.exports={createV2Handler,mapMessage,mapSuggestion};
+module.exports={createV2Handler,mapMessage,mapSuggestion,mapTask};

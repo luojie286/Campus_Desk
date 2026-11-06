@@ -4,7 +4,7 @@ const path = require('node:path');
 const { fork } = require('node:child_process');
 const { MAX_BYTES, hash, fail, relativeName, within, checkedAbsolute, resolveSource, readFile, checkFormat, publish } = require('./files.cjs');
 const profiles = require('../documents/profile.cjs');
-const { createTodoKnowledge, liveAdmission } = require('./todos.cjs');
+const { createTodoKnowledge } = require('./todos.cjs');
 
 function transaction(db, work) {
   db.exec('BEGIN IMMEDIATE');
@@ -111,9 +111,10 @@ function parser(name, bytes, languagePath) {
   });
 }
 
-function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.join(storage, 'trash') }) {
+function createKnowledge({ db, owner, workspace, storage, languagePath, trashRoot = path.join(storage, 'trash') }) {
   if (!ready(db)) fail('assistant_unavailable', 503);
-  const todos = createTodoKnowledge(db, owner);
+  const todos = createTodoKnowledge(db, owner, workspace);
+  const { liveAdmission } = todos;
   const previews = new Map();
   let parsing = false;
   const rootById = db.prepare('SELECT * FROM kb_roots WHERE owner=? AND id=?');
@@ -501,6 +502,13 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
     return result;
   }
 
+  function messageEvidence(ids) {
+    const lookup = db.prepare("SELECT c.*,d.id AS doc FROM kb_chunks c JOIN kb_documents d ON d.rev=c.rev " +
+      "JOIN kb_todo_sources s ON s.rev=d.rev WHERE d.owner=? AND s.message=? AND d.state='active' AND " +
+      liveAdmission + ' ORDER BY c.id LIMIT 2');
+    return ids.slice(0, 20).flatMap(id => lookup.all(owner, id).map(evidence).filter(Boolean));
+  }
+
   function entries(id, directory = '', offset = 0) {
     const root = rootOrFail(id);
     const target = directory ? resolveSource(root, directory) : checkedAbsolute(root.path);
@@ -517,7 +525,7 @@ function createKnowledge({ db, owner, storage, languagePath, trashRoot = path.jo
   }
 
   return {
-    preview, decide, search, researchSources, getEvidence, cloudAllowed, entries,
+    preview, decide, search, researchSources, messageEvidence, getEvidence, cloudAllowed, entries,
     todos: todos.list,
     profile: () => Object.entries(profiles.fields(db)).map(([key, value]) => ({ key, value })),
     getPreview(id) { purgePreviews(); const receipt = previews.get(id); if (!receipt) fail('not_found', 404); return review(receipt); },

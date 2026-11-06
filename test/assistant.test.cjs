@@ -17,7 +17,7 @@ const { createAssistant } = require('../src/assistant/api.cjs');
 const token = 'fixture-owner-only-0000000000000000000000000000';
 const live = process.env.LAB1_ASSISTANT_LIVE_FIXTURE === '1';
 
-async function fixture(t, { externalTrash = false, modelReply, liveModel = live, outputLimit = 256 } = {}) {
+async function fixture(t, { externalTrash = false, modelReply, liveModel = live, outputLimit = 256, workspaceSheets = false } = {}) {
   const parent = fs.realpathSync(os.tmpdir());
   const folder = fs.mkdtempSync(path.join(parent, 'lab1-assistant-test-'));
   const source = path.join(folder, 'source');
@@ -48,6 +48,16 @@ async function fixture(t, { externalTrash = false, modelReply, liveModel = live,
   const secondModel = { ...model, id: 'fixture-review', model: liveModel ? model.model : 'fixture-review-model' };
   const config = { db, owner: 'fixture-account', storage: fs.realpathSync(storage), trashRoot,
     languagePath: path.resolve('.private/ocr'), token, models: [model, secondModel], port };
+  if (workspaceSheets) {
+    db.exec("CREATE TABLE workspace_tasks(task_id INTEGER PRIMARY KEY,workspace_id TEXT,origin_kind TEXT);" +
+      "CREATE TABLE workspace_source_bindings(workspace_id TEXT,provider TEXT,account_ref TEXT,history_allowed INTEGER);" +
+      "INSERT INTO workspace_source_bindings VALUES('fixture-account','qq','9991',1)");
+    config.workspace = { id: 'fixture-account' };
+    config.sheets = require('../src/sheets/service.cjs').createSheetService({ db, workspace: config.workspace, execute: true,
+      enabled: workspaceSheets !== 'disabled',
+      tasks: require('../src/db/repositories/tasks.cjs').createTaskRepository(db),
+      jobs: require('../src/db/repositories/jobs.cjs').createJobRepository(db) });
+  }
   const previous = process.env.LAB1_ASSISTANT_MOCK_TOKEN;
   process.env.LAB1_ASSISTANT_MOCK_TOKEN = 'fixture';
   if (!liveModel) {
@@ -90,9 +100,9 @@ async function fixture(t, { externalTrash = false, modelReply, liveModel = live,
     request('/previews/' + draft.id + '/decision', { decision, digest: draft.digest, clientRequestId: id }, status);
   const approve = async body => decide(await preview(body));
   const root = (await approve({ kind: 'grant_root', path: source })).rootId;
-  const ask = async (question, useModel = false, sourceIds) => {
+  const ask = async (question, useModel = false, sourceIds, options = {}) => {
     const session = await request('/sessions', {}, 201);
-    await request('/sessions/' + session.id + '/turns', { question, sourceIds, useModel, modelId: 'fixture', clientRequestId: randomUUID() }, 202);
+    await request('/sessions/' + session.id + '/turns', { question, sourceIds, useModel, modelId: 'fixture', clientRequestId: randomUUID(), ...options }, 202);
     try {
       const deadline = Date.now() + 32000;
       while (Date.now() < deadline) {
@@ -105,7 +115,7 @@ async function fixture(t, { externalTrash = false, modelReply, liveModel = live,
       await request('/sessions/' + session.id + '/close', {});
     }
   };
-  return { folder, source, storage, trashRoot, db, request, root, preview, decide, approve, ask, calls,
+  return { folder, source, storage, trashRoot, db, request, root, preview, decide, approve, ask, calls, sheets: config.sheets,
     restart: () => { handler = createAssistant(config); }, base: 'http://127.0.0.1:' + port + '/v1/assistant' };
 }
 
@@ -277,17 +287,17 @@ test('M1 desktop: import approval and local citation from the built workbench',
     let release;
     const gate = new Promise(resolve => { release = resolve; });
     t.after(() => release());
-    const f = await fixture(t, { liveModel: false, modelReply: async (input, payload) => {
+    const f = await fixture(t, { workspaceSheets: true, liveModel: false, modelReply: async (input, payload) => {
       await gate;
       return researchReply(input, payload);
     } });
     fs.writeFileSync(path.join(f.source, '本机验收.md'), '信号标记 8136');
     const messages = require('../src/db/repositories/messages.cjs').createMessageRepository(f.db);
     const suggestions = require('../src/db/repositories/suggestions.cjs').createSuggestionRepository(f.db);
-    const raw = messages.insert({ platform: 'qq', adapterInstance: 'fixture', accountRef: 'fixture-account',
+    const raw = messages.insert({ platform: 'qq', adapterInstance: 'fixture', accountRef: '9991',
       conversationType: 'private', conversationId: '101', senderId: '101', sourceMessageId: 'm2-ui',
       kind: 'text', contentText: '取样地点 7351', receivedAt: new Date().toISOString() });
-    suggestions.accept({ id: suggestions.insert({ messageId: raw.id, title: '取样验收待办' }), accountRef: 'fixture-account' });
+    suggestions.accept({ id: suggestions.insert({ messageId: raw.id, title: '取样验收待办' }), accountRef: '9991' });
     const dist = path.resolve('desktop/dist');
     const server = http.createServer((req, res) => {
       const url = new URL(req.url, 'http://127.0.0.1');
@@ -340,6 +350,25 @@ test('M1 desktop: import approval and local citation from the built workbench',
     await dialog.getByText('拟更新 · 合成专业', { exact: true }).waitFor();
     await dialog.getByRole('button', { name: '批准', exact: true }).click();
     await page.getByText('专业 · 合成专业', { exact: true }).waitFor();
+    const profiles = require('../src/documents/profile.cjs');
+    profiles.saveProfile(f.db, { name: '测试甲', student_id: '0001', age: 20, sex: '示例' });
+    await page.getByLabel('腾讯表格链接').fill('https://docs.qq.com/sheet/synthetic');
+    const queued = page.waitForResponse(response => response.request().method() === 'POST' && response.url().endsWith('/sheet-tasks'));
+    await page.getByRole('button', { name: '只读准备填表计划', exact: true }).click();
+    const created = (await (await queued).json()).data;
+    const preparation = await require('../src/worker/prepare.cjs').processNextPrepareJob({
+      tasks: f.sheets.tasks, jobs: f.sheets.jobs, config: { execute: true }, workerId: 'desktop-fixture',
+      allowedTask: f.sheets.allowedTask, fields: () => profiles.fields(f.db),
+      createSheet: () => ({ open: async () => {}, close: async () => {},
+        readUsedRange: async () => [['姓名', '学号', '专业'], ['测试甲', '0001', '']] }),
+      analyze: async () => ({ mappings: [{ column: 3, field: 'major' }], confidence: 1, notes: [] })
+    });
+    assert.equal(preparation.state, 'awaiting_approval');
+    await page.getByRole('button', { name: '批准并写入', exact: true }).click();
+    assert.equal((await f.request('/sheet-tasks/' + created.id)).state, 'awaiting_approval');
+    await page.getByRole('button', { name: '确认写入', exact: true }).click();
+    await page.getByRole('button', { name: '确认写入', exact: true }).waitFor({ state: 'hidden' });
+    assert.equal((await f.request('/sheet-tasks/' + created.id)).state, 'approved');
     await f.approve({ kind: 'cloud_grant', rootId: f.root });
     await page.getByRole('button', { name: 'Deeper Research', exact: true }).click();
     await page.getByLabel('研究问题').fill('信号标记');
@@ -710,4 +739,164 @@ test('M3 live: two configured Agents exchange evidence and produce a report',
     assert.match(task.result.answer, /7316/);
     assert.ok(task.budget.tokens > 0);
     t.diagnostic(JSON.stringify({ state: task.state, calls: task.budget.calls, tokens: task.budget.tokens, phaseCount: 4 }));
+  });
+
+test('R3: desktop and QQ prepare the same plan, and approved execution can be reconciled read-only', async t => {
+  const f = await fixture(t, { workspaceSheets: true });
+  const { createMessageRepository } = require('../src/db/repositories/messages.cjs');
+  const { createClassificationRepository } = require('../src/db/repositories/classifications.cjs');
+  const { processNextClassifyJob } = require('../src/worker/classify.cjs');
+  const { processNextPrepareJob } = require('../src/worker/prepare.cjs');
+  const { processNextExecuteJob } = require('../src/worker/execute.cjs');
+  const { processNextReconcileJob } = require('../src/worker/reconcile.cjs');
+  const profiles = require('../src/documents/profile.cjs');
+  const { sheets } = f;
+  const { tasks, jobs } = sheets;
+  profiles.saveProfile(f.db, { name: '测试甲', student_id: '0001', age: 20, sex: '示例' });
+  profiles.setField(f.db, 'major', '工作区专业');
+  const target = 'https://docs.qq.com/sheet/synthetic';
+  const manual = await f.request('/sheet-tasks', { target, clientRequestId: 'fixture-sheet' }, 202);
+  assert.equal((await f.request('/sheet-tasks', { target, clientRequestId: 'fixture-sheet' }, 202)).id, manual.id);
+  await f.request('/sheet-tasks', { target: 'https://example.invalid/', clientRequestId: 'bad' }, 400);
+  const messages = createMessageRepository(f.db);
+  const message = messages.insert({ platform: 'qq', adapterInstance: 'fixture', accountRef: '9991',
+    conversationType: 'private', conversationId: '101', senderId: '101', sourceMessageId: 'fixture-r3',
+    contentText: target, linkJson: [target] });
+  jobs.enqueue({ type: 'classify_message', payload: { messageId: message.id, accountRef: '9991' } });
+  const classified = await processNextClassifyJob({ messages, jobs, tasks,
+    classifications: createClassificationRepository(f.db), prepareFromMessage: sheets.prepareFromMessage, workerId: 'fixture' });
+  assert.equal(classified.tasks.length, 1);
+  const qq = classified.tasks[0];
+  const grid = [['姓名', '学号', '专业'], ['测试甲', '0001', '']];
+  let writes = 0;
+  const worker = { tasks, jobs, config: { execute: true }, workerId: 'fixture', allowedTask: sheets.allowedTask,
+    fields: () => profiles.fields(f.db),
+    analyze: async () => ({ mappings: [{ column: 3, field: 'major' }], confidence: 1, notes: [] }),
+    createSheet: () => ({ open: async () => {}, close: async () => {}, readUsedRange: async () => grid,
+      applyGeneral: async plan => { writes++; grid[1][2] = plan.changes[0].value; },
+      verifyGeneral: async () => false }) };
+  for (let i = 0; i < 2; i++) assert.equal((await processNextPrepareJob(worker)).state, 'awaiting_approval');
+  const prepared = await f.request('/sheet-tasks/' + manual.id);
+  const qqPrepared = await f.request('/sheet-tasks/' + qq.id);
+  assert.deepEqual(prepared.plan.plan.changes, qqPrepared.plan.plan.changes);
+  assert.equal(writes, 0);
+  assert.equal((await processNextExecuteJob(worker)).processed, false);
+  const foreign = tasks.create({ accountRef: 'foreign', targetRef: target });
+  await f.request('/sheet-tasks/' + foreign.id, undefined, 404);
+  const body = { plan_id: prepared.plan.id, plan_version: prepared.plan.version, plan_digest: prepared.plan.digest,
+    client_request_id: 'fixture-approve' };
+  const approval = await f.request('/sheet-tasks/' + manual.id + '/approvals', body);
+  assert.equal((await f.request('/sheet-tasks/' + manual.id + '/approvals', body)).operation.id, approval.operation.id);
+  assert.equal((await processNextExecuteJob(worker)).state, 'outcome_unknown');
+  assert.equal(writes, 1);
+  assert.equal((await processNextExecuteJob(worker)).processed, false);
+  await f.request('/sheet-tasks/' + manual.id + '/reconcile', {}, 202);
+  assert.equal((await processNextReconcileJob(worker)).state, 'completed');
+  assert.equal(writes, 1);
+});
+
+function toolReply(calls) {
+  return Response.json({ choices: [{ message: { content: null, tool_calls: calls.map(([name, args], i) => ({
+    id: 'call-' + i, type: 'function', function: { name, arguments: JSON.stringify(args) }
+  })) } }], usage: { total_tokens: 42 } });
+}
+
+test('R4: model tools reuse approved evidence and can queue only the permitted sheet', async t => {
+  let step = 0;
+  const trace = [];
+  const target = 'https://docs.qq.com/sheet/fixture';
+  const f = await fixture(t, { workspaceSheets: true, liveModel: false, modelReply(input, payload) {
+    trace.push(payload);
+    if (++step === 1) return toolReply([['knowledge_search', { query: '7316' }],
+      ['messages_list_authorized', { query: '绝不外发' }]]);
+    if (step === 2) {
+      assert.ok(payload.messages.some(message => message.role === 'tool' && message.content.includes('7316')));
+      assert.ok(!payload.messages.some(message => message.role === 'tool' && message.content.includes('绝不外发')));
+      return toolReply([['sheet_prepare_fill_plan', { target }], ['sheet_execute', { target }]]);
+    }
+    const evidence = payload.messages.filter(message => message.role === 'tool').map(message => JSON.parse(message.content)).find(result => result.items?.length).items[0];
+    return Response.json({ choices: [{ message: { content: JSON.stringify({
+      answer: '工作区样本 7316', citations: [evidence.id], supplement: ''
+    }) } }], usage: { total_tokens: 42 } });
+  } });
+  const doc = await researchSource(f);
+  await f.approve({ kind: 'cloud_grant', documentId: doc });
+  const messages = require('../src/db/repositories/messages.cjs').createMessageRepository(f.db);
+  messages.insert({ platform: 'qq', adapterInstance: 'fixture', accountRef: '9991', conversationType: 'private',
+    conversationId: '101', senderId: '101', sourceMessageId: 'tool-hidden', contentText: '绝不外发，仅历史可读' });
+  const result = await f.ask('请查询样本并准备表格', true, undefined, { enableTools: true, toolTarget: target });
+  assert.equal(result.status, 'answered');
+  assert.deepEqual(result.activity.map(item => item.status), ['found', 'no_evidence', 'queued', 'tool_unavailable']);
+  assert.equal(trace.length, 3);
+  assert.deepEqual(trace[0].tools.map(item => item.function.name), ['knowledge_search','messages_list_authorized','sheet_prepare_fill_plan']);
+  const [task] = (await f.request('/sheet-tasks')).items;
+  assert.equal(task.id, result.activity[2].taskId);
+  assert.equal(task.state, 'created');
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM approvals').get().n, 0);
+  assert.equal(f.db.prepare("SELECT count(*) AS n FROM jobs WHERE type='execute_operation'").get().n, 0);
+});
+
+test('R4: invalid arguments, wrong target, and exhausted budgets cannot queue extra operations', async t => {
+  const target = 'https://docs.qq.com/sheet/fixture';
+  let calls = 0;
+  const f = await fixture(t, { workspaceSheets: true, liveModel: false, modelReply(_input, payload) {
+    calls++;
+    if (calls === 1) return toolReply([['knowledge_search', { query: '7316', owner: 'foreign' }]]);
+    if (calls === 2) return toolReply([['sheet_prepare_fill_plan', { target: 'https://docs.qq.com/sheet/other' }]]);
+    if (calls === 3) return toolReply([['knowledge_search', { query: '7316' }]]);
+    return toolReply([['sheet_prepare_fill_plan', { target }]]);
+  } });
+  const doc = await researchSource(f);
+  await f.approve({ kind: 'cloud_grant', documentId: doc });
+  const result = await f.ask('核对样本', true, undefined, { enableTools: true, toolTarget: target });
+  assert.equal(result.status, 'tool_budget_exhausted');
+  assert.deepEqual(result.activity.map(item => item.status), ['invalid_tool_input', 'outside_scope', 'found']);
+  assert.equal(calls, 4);
+  assert.equal((await f.request('/sheet-tasks')).items.length, 0);
+});
+
+test('R4: closing a tool turn fences a late preparation request', async t => {
+  const target = 'https://docs.qq.com/sheet/fixture';
+  let release;
+  const f = await fixture(t, { workspaceSheets: true, liveModel: false, modelReply() {
+    return new Promise(resolve => { release = () => resolve(toolReply([['sheet_prepare_fill_plan', { target }]])); });
+  } });
+  const chat = await f.request('/sessions', {}, 201);
+  await f.request('/sessions/' + chat.id + '/turns', { question: '准备这个表格', useModel: true, modelId: 'fixture',
+    enableTools: true, toolTarget: target, clientRequestId: 'tool-cancel' }, 202);
+  for (let i = 0; i < 50 && !release; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(typeof release, 'function');
+  await f.request('/sessions/' + chat.id + '/close', {});
+  release();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal((await f.request('/sheet-tasks')).items.length, 0);
+});
+
+test('R4: disabled sheet capability is excluded from the model tool list', async t => {
+  const f = await fixture(t, { workspaceSheets: 'disabled', liveModel: false, modelReply(_input, payload) {
+    assert.ok(payload.tools.every(tool => tool.function.name !== 'sheet_prepare_fill_plan'));
+    if (!payload.messages.some(message => message.role === 'tool')) {
+      return toolReply([['sheet_prepare_fill_plan', { target: 'https://docs.qq.com/sheet/fixture' }]]);
+    }
+    return Response.json({ choices: [{ message: { content: '{"answer":"","citations":[]}' } }], usage: { total_tokens: 20 } });
+  } });
+  const doc = await researchSource(f);
+  await f.approve({ kind: 'cloud_grant', documentId: doc });
+  await f.request('/sheet-tasks', undefined, 503);
+  const result = await f.ask('核对样本', true, undefined, { enableTools: true });
+  assert.equal(result.activity[0].status, 'tool_unavailable');
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM tasks').get().n, 0);
+});
+
+test('R4 live: configured model can call knowledge search on synthetic notes',
+  { skip: process.env.LAB1_TOOL_LIVE_FIXTURE !== '1', timeout: 60000 }, async t => {
+    const f = await fixture(t, { workspaceSheets: true, liveModel: true, outputLimit: 768 });
+    const doc = await researchSource(f);
+    await f.approve({ kind: 'cloud_grant', documentId: doc });
+    const result = await f.ask('请必须先调用 knowledge_search 查询“合成研究标记”，再引用工具返回的证据回答。', true,
+      undefined, { enableTools: true });
+    assert.equal(result.status, 'answered');
+    assert.ok(result.activity.some(item => item.name === 'knowledge_search' && item.status === 'found'));
+    assert.match(result.answer, /7316/);
+    t.diagnostic(JSON.stringify({ status: result.status, tools: result.activity.length, tokens: result.tokens }));
   });

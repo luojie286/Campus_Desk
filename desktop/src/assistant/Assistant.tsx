@@ -3,6 +3,8 @@ import {invoke} from '@tauri-apps/api/core';
 import {readCredentials} from '../api';
 import {isTauriApp} from '../secure';
 import Research from './Research';
+import SheetWorkspace from './SheetWorkspace';
+import type {SheetTaskRenderer} from './SheetWorkspace';
 import type {EffortPresets} from './Research';
 import './assistant.css';
 
@@ -10,7 +12,8 @@ type Root = {id: string; path: string};
 type Entry = {name: string; directory: boolean};
 type Document = {id: string; name: string; rootId: string | null; status: string; text?: string; kind?: 'file' | 'todo'};
 type Evidence = {id: string; title: string; locator: string; quote: string};
-type Result = {status: string; answer?: string; supplement?: string; limited?: boolean; evidence: Evidence[]};
+type Result = {status: string; answer?: string; supplement?: string; limited?: boolean; evidence: Evidence[];
+  activity?: {name: string; status: string; taskId?: number}[]};
 type Session = {id: string; state: string; turns: {id: string; question: string; result?: Result}[]};
 type Preview = {id: string; digest: string; details: {
   kind: string; path?: string; label?: string; name?: string; target?: string; blob?: string;
@@ -27,6 +30,8 @@ const feedback: Record<string, string> = {
   cloud_grant_required: '以下是本机资料。生成模型回答需要先授权对应资料。',
   model_failed: '模型请求失败，可继续查看本机检索结果。',
   model_unavailable: '所选模型暂不可用。',
+  sheet_queued: '填写计划已进入只读准备。可以到工作区填表查看和审批。',
+  tool_budget_exhausted: '本轮工具问答已达到预算上限。',
   preview_changed: '目标已变化，请重新预览。',
   profile_busy: '正在写表或回读，完成后再更新个人资料。',
   source_changed: '来源已变化，请重新提问。',
@@ -63,12 +68,18 @@ type TodoItem = {id: number; title: string; admitted: number};
 type Field = {key: string; value: string};
 const profileLabels: Record<string, string> = {name: '姓名', student_id: '学号', sex: '性别', age: '年龄', major: '专业', phone: '电话', email: '邮箱'};
 
-export default function Assistant({candidate, onCandidateDone}: {candidate?: number; onCandidateDone?: () => void}) {
+export default function Assistant({candidate, onCandidateDone, renderSheetTask}: {
+  candidate?: number; onCandidateDone?: () => void; renderSheetTask: SheetTaskRenderer;
+}) {
   const [token, setToken] = useState(browserToken);
   const [tokenDraft, setTokenDraft] = useState('');
   const [models, setModels] = useState<Model[]>([]);
   const [effortPresets, setEffortPresets] = useState<EffortPresets>();
   const [showResearch, setShowResearch] = useState(false);
+  const [sheetsEnabled, setSheetsEnabled] = useState(false);
+  const [toolsAvailable, setToolsAvailable] = useState(false);
+  const [enableTools, setEnableTools] = useState(false);
+  const [toolTarget, setToolTarget] = useState('');
   const [model, setModel] = useState('');
   const [useModel, setUseModel] = useState(false);
   const [roots, setRoots] = useState<Root[]>([]);
@@ -97,7 +108,7 @@ export default function Assistant({candidate, onCandidateDone}: {candidate?: num
 
   async function refresh(credentials: string, offset = 0) {
     const [cap, folders, knowledge, chats, cloud, openTodos, fields] = await Promise.all([
-      api<{models: Model[]; effortPresets: EffortPresets}>(credentials, '/capabilities'),
+      api<{models: Model[]; effortPresets: EffortPresets; sheets?: boolean; tools?: boolean}>(credentials, '/capabilities'),
       api<{items: Root[]}>(credentials, '/roots'),
       api<{items: Document[]}>(credentials, '/knowledge?offset=' + offset),
       api<{items: {id: string}[]}>(credentials, '/sessions'),
@@ -107,6 +118,8 @@ export default function Assistant({candidate, onCandidateDone}: {candidate?: num
     ]);
     setModels(cap.models);
     setEffortPresets(cap.effortPresets);
+    setSheetsEnabled(!!cap.sheets);
+    setToolsAvailable(!!cap.tools);
     setModel(old => cap.models.some(entry => entry.id === old) ? old : cap.models[0]?.id || '');
     setRoots(folders.items);
     setDocs(knowledge.items);
@@ -190,6 +203,7 @@ export default function Assistant({candidate, onCandidateDone}: {candidate?: num
       </form>
       {notice && <div className="callout" role="status">{notice}</div>}
       {token && <>
+        {sheetsEnabled && <SheetWorkspace request={researchRequest} renderTask={renderSheetTask} />}
         <div className="assistant-actions">
           <button className="button" onClick={() => setShowResearch(false)}>普通问答</button>
           <button className="button" disabled={!effortPresets} onClick={() => setShowResearch(true)}>Deeper Research</button>
@@ -208,11 +222,22 @@ export default function Assistant({candidate, onCandidateDone}: {candidate?: num
           <label className="assistant-checkbox"><input type="checkbox" checked={useModel} onChange={event => setUseModel(event.target.checked)} />
             使用模型整理已授权资料
           </label>
+          {useModel && toolsAvailable && <label className="assistant-checkbox">
+            <input type="checkbox" checked={enableTools} onChange={event => setEnableTools(event.target.checked)} />
+            允许模型调用本轮授权的查询与准备工具
+          </label>}
+          {useModel && toolsAvailable && enableTools && sheetsEnabled && <label>
+            本轮可准备的腾讯表格（可选）
+            <input value={toolTarget} onChange={event => setToolTarget(event.target.value)} maxLength={2048} />
+          </label>}
           <form onSubmit={event => {
             event.preventDefault();
             void run(async () => {
               const value = session || await api<Session>(token, '/sessions', {});
-              await api(token, '/sessions/' + value.id + '/turns', {question, modelId: model, useModel, clientRequestId: crypto.randomUUID()});
+              const tools = useModel && toolsAvailable && enableTools;
+              await api(token, '/sessions/' + value.id + '/turns', {question, modelId: model, useModel, enableTools: tools,
+                toolTarget: tools && sheetsEnabled && toolTarget.trim() ? toolTarget.trim() : undefined,
+                clientRequestId: crypto.randomUUID()});
               setSession(await api<Session>(token, '/sessions/' + value.id));
               setQuestion('');
             });
@@ -231,6 +256,9 @@ export default function Assistant({candidate, onCandidateDone}: {candidate?: num
               <p className="assistant-text">{turn.result.answer || feedback[turn.result.status] || turn.result.status}</p>
               {turn.result.supplement && <p>模型补充 · {turn.result.supplement}</p>}
               {turn.result.limited && <p>模型回答仅覆盖本次获授权且纳入上下文的资料。</p>}
+              {turn.result.activity?.map((item, index) => <p key={index}>
+                {item.taskId ? '填表任务 #' + item.taskId + ' 已排队，等待查看与审批。' : '工具 · ' + item.name + ' · ' + item.status}
+              </p>)}
               {turn.result.evidence.map(item => <button className="button assistant-source" key={item.id} onClick={() =>
                 void run(async () => setReference(await api<Evidence>(token, '/evidence/' + item.id)))}>
                 {item.title} · {item.locator}

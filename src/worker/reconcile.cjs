@@ -45,7 +45,8 @@ async function processNextReconcileJob({
   config,
   workerId,
   now=new Date().toISOString(),
-  createSheet
+  createSheet,
+  allowedTask=()=>true
 }){
   const job=jobs.claim({workerId,leaseSeconds:300,now,type:'reconcile_task'});
   if(!job)return {processed:false};
@@ -59,7 +60,7 @@ async function processNextReconcileJob({
 
     // tasks.get 同时校验账号；不使用 getAny，避免跨账号核对。
     task=tasks.get({id:taskId,accountRef});
-    if(!task){
+    if(!task||!allowedTask(task)){
       jobs.complete(job.id,now);
       return {processed:true,jobId:job.id,error:'task_not_found'};
     }

@@ -8,6 +8,7 @@ const {applyMigrations,CURRENT_VERSION}=require('../src/db/migrate.cjs');
 const {backupDatabase}=require('../src/db/backup.cjs');
 const {createDeviceRepository}=require('../src/network/devices.cjs');
 const {createGateway}=require('../src/network/gateway.cjs');
+const {accountHasHistory}=require('../src/workspace/context.cjs');
 
 const root=path.resolve(__dirname,'..'),privateDir=path.join(root,'.private');
 const configFile=path.join(privateDir,'config.json'),dbFile=path.join(privateDir,'poc.sqlite');
@@ -56,7 +57,7 @@ async function main(){
   if(!fs.existsSync(dbFile))throw Error('database_not_initialized');
   const {db,devices}=openDevices();
   if(command==='serve'){
-    const server=createGateway({devices,getConfig:config});
+    const server=createGateway({devices,getConfig:config,authorizeAccount:account=>accountHasHistory(db,account)});
     server.on('error',()=>{console.error('mobile_gateway_listen_failed');db.close();process.exitCode=1;});
     server.listen(9090,'127.0.0.1',()=>console.log('Mobile gateway listening on 127.0.0.1:9090'));
     for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>server.close(()=>{db.close();process.exit(0);}));
@@ -66,6 +67,7 @@ async function main(){
     const account=String(config().account_id||'');
     if(!account)throw Error('account_not_configured');
     if(command==='invite'){
+      if(!accountHasHistory(db,account))throw Error('workspace_source_unavailable');
       const base=networkBase();
       const invite=devices.invite(account,{readOnly:argument==='--read-only'});
       const file=path.join(privateDir,'pairing-invitation.json');

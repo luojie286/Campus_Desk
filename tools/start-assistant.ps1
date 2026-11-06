@@ -2,7 +2,10 @@ param(
     [switch]$CopyDesktopToken,
     [switch]$PrepareOnly,
     [switch]$Background,
-    [switch]$WithLegacy
+    [switch]$WithLegacy,
+    [switch]$WithQQ,
+    [switch]$WithSheets,
+    [switch]$WithBriefings
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,12 +45,16 @@ if (Get-NetTCPConnection -LocalPort $servicePort -State Listen -ErrorAction Sile
 $previousAssistantToken = $env:CAMPUS_DESK_ASSISTANT_TOKEN
 $env:CAMPUS_DESK_ASSISTANT_TOKEN = $assistantSecret
 $serveCommand = if ($WithLegacy) { 'serve' } else { 'serve-assistant' }
+$serveArguments = @('src/poc.cjs', $serveCommand)
+if ($WithQQ) { $serveArguments += '--qq' }
+if ($WithSheets) { $serveArguments += '--sheets' }
+if ($WithBriefings) { $serveArguments += '--briefings' }
 try {
     if ($Background) {
-        Start-Process -FilePath $runtimeExe -ArgumentList 'src/poc.cjs',$serveCommand -WorkingDirectory $projectDirectory -WindowStyle Hidden -PassThru |
+        Start-Process -FilePath $runtimeExe -ArgumentList $serveArguments -WorkingDirectory $projectDirectory -WindowStyle Hidden -PassThru |
             Select-Object -ExpandProperty Id
     } else {
-        & $runtimeExe src/poc.cjs $serveCommand
+        & $runtimeExe @serveArguments
         exit $LASTEXITCODE
     }
 } finally {

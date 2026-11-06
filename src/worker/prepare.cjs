@@ -28,6 +28,7 @@ async function processNextPrepareJob({
   workerId,
   now=new Date().toISOString(),
   fields,
+  allowedTask=()=>true,
   reservationFor=()=>null,
   createSheet,
   analyze
@@ -42,6 +43,10 @@ async function processNextPrepareJob({
     if(!Number.isInteger(taskId)||!accountRef)throw Error('task_reference_invalid');
     task=tasks.get({id:taskId,accountRef});
     if(!task)throw Error('task_not_found');
+    if(!allowedTask(task)){
+      jobs.complete(job.id,now);
+      return {processed:true,jobId:job.id,skipped:true,error:'outside_scope'};
+    }
     if(task.state==='created')task=tasks.transition({id:task.id,accountRef,event:'start',now});
     else if(task.state==='failed_retryable')task=tasks.transition({id:task.id,accountRef,event:'retry',now});
     if(task.state!=='preparing')throw Error('task_not_preparing');

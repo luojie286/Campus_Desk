@@ -532,7 +532,10 @@ function App() {
             )}
             {view !== 'assistant' && error && <div className="callout callout-error" role="alert"><CircleAlert size={17} /><span>{error}</span></div>}
             {view !== 'assistant' && notice && <div className="callout callout-info"><CheckCircle2 size={17} /><span>{notice}</span></div>}
-            {view === 'assistant' && <Assistant candidate={assistantCandidate} onCandidateDone={() => setAssistantCandidate(undefined)} />}
+            {view === 'assistant' && <Assistant candidate={assistantCandidate} onCandidateDone={() => setAssistantCandidate(undefined)}
+              renderSheetTask={(task, actions, busy) => <TaskDetail task={task} busy={busy}
+                onApprove={actions.approve} onAnswer={actions.answer} onCancel={actions.cancel}
+                onReconcile={actions.reconcile} onResume={actions.resume} />} />}
 
             {view === 'inbox' && (
               <div className="stream">

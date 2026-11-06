@@ -20,7 +20,7 @@ function scopeFor(method,path){
   return null;
 }
 
-function createGateway({devices,getConfig,fetchImpl=fetch}){
+function createGateway({devices,getConfig,authorizeAccount=()=>true,fetchImpl=fetch}){
   let pairingWindow=0,pairingAttempts=0;
   const server=http.createServer(async(req,res)=>{
     try{
@@ -33,6 +33,7 @@ function createGateway({devices,getConfig,fetchImpl=fetch}){
       if(req.method==='GET'&&url.pathname==='/health'){send(res,200,{running:true,service:'mobile-gateway'});return;}
       const config=getConfig();
       if(!config.account_id){send(res,503,{error:'account_not_configured'});return;}
+      if(!authorizeAccount(String(config.account_id))){send(res,403,{error:'workspace_source_unavailable'});return;}
       if(req.method==='POST'&&url.pathname==='/v1/device-pairings'){
         // Serve 转发后多个手机可能都显示回环地址，采用全局上限而非信任客户端 IP 头。
         const window=Math.floor(Date.now()/60_000);

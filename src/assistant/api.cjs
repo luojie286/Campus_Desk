@@ -4,6 +4,10 @@ const { randomUUID, timingSafeEqual } = require('node:crypto');
 const { createKnowledge, ready } = require('../knowledge/repository.cjs');
 const { fail, checkedAbsolute } = require('../knowledge/files.cjs');
 const { createResearch, presets } = require('../research/runner.cjs');
+const { resolveWorkspace } = require('../workspace/context.cjs');
+const { listAuthorizedMessages } = require('../messages/service.cjs');
+const { createV2Handler, mapTask } = require('../api/v2.cjs');
+const { allowedTarget, runTools } = require('./tools.cjs');
 
 const PREFIX = '/v1/assistant';
 const MAX_BODY = 256 * 1024;
@@ -67,7 +71,7 @@ function sameToken(left, right) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-async function requestModel(model, messages, { signal, fetchModel, output = model.output, timeout = model.timeout }) {
+async function requestModel(model, messages, { signal, fetchModel, output = model.output, timeout = model.timeout, tools }) {
   const credential = process.env[model.credential];
   if (!credential) fail('model_unavailable', 503);
   const response = await fetchModel(model.endpoint, {
@@ -77,6 +81,8 @@ async function requestModel(model, messages, { signal, fetchModel, output = mode
     body: JSON.stringify({
       model: model.model, stream: false, max_tokens: output,
       response_format: { type: 'json_object' },
+      ...(tools?.length ? { tools, tool_choice: 'auto',
+        ...(new URL(model.endpoint).hostname === 'api.deepseek.com' ? { thinking: { type: 'disabled' } } : {}) } : {}),
       messages
     })
   });
@@ -85,7 +91,7 @@ async function requestModel(model, messages, { signal, fetchModel, output = mode
     fail('model_failed', 502);
   }
   const parsed = JSON.parse(await limitedBytes(response.body, 256 * 1024, 'model_failed'));
-  return { content: parsed.choices?.[0]?.message?.content,
+  return { content: parsed.choices?.[0]?.message?.content, toolCalls: parsed.choices?.[0]?.message?.tool_calls,
     tokens: Number.isSafeInteger(parsed.usage?.total_tokens) && parsed.usage.total_tokens >= 0 ? parsed.usage.total_tokens : null };
 }
 
@@ -95,6 +101,10 @@ async function callModel(model, evidence, question, signal, fetchModel) {
     { role: 'user', content: JSON.stringify({ question, evidence: evidence.map(({ id, quote, locator }) => ({ id, quote, locator })) }) }
   ];
   const response = await requestModel(model, messages, { signal, fetchModel });
+  return parseAnswer(response, evidence);
+}
+
+function parseAnswer(response, evidence) {
   const result = JSON.parse(response.content || '{}');
   if (typeof result.answer !== 'string' || result.answer.length > 12000 ||
       !Array.isArray(result.citations) || result.citations.length > 8 ||
@@ -107,10 +117,10 @@ async function callModel(model, evidence, question, signal, fetchModel) {
   };
 }
 
-function createAssistant({ db, owner, storage, trashRoot, languagePath, token, models = [], port, fetchModel = fetch }) {
+function createAssistant({ db, owner, workspace, sheets, storage, trashRoot, languagePath, token, models = [], port, fetchModel = fetch }) {
   const epoch = randomUUID();
   const sessions = new Map();
-  const knowledge = createKnowledge({ db, owner, storage, trashRoot, languagePath });
+  const knowledge = createKnowledge({ db, owner, workspace, storage, trashRoot, languagePath });
   const research = createResearch({ knowledge, models, sessionCount: () => sessions.size,
     requestModel: (model, messages, options) => requestModel(model, messages, { ...options, fetchModel }) });
   let sequence = 0;
@@ -141,24 +151,41 @@ function createAssistant({ db, owner, storage, trashRoot, languagePath, token, m
   async function runTurn(value, turn, input) {
     try {
       const matches = knowledge.search(turn.question, input.sourceIds);
-      const allowed = input.useModel === true ? matches.filter(knowledge.cloudAllowed).slice(0, 20) : [];
+      let allowed = input.useModel === true ? matches.filter(knowledge.cloudAllowed).slice(0, 20) : [];
       const model = models.find(entry => entry.id === input.modelId);
-      if (!matches.length) {
+      const target = input.enableTools === true ? allowedTarget(input.toolTarget) : null;
+      const useTools = input.useModel === true && input.enableTools === true && !!workspace &&
+        (allowed.length > 0 || (target && sheets?.enabled) || knowledge.grants().length > 0);
+      if (!matches.length && !useTools) {
         turn.result = { status: 'no_evidence', answer: '', evidence: [] };
-      } else if (!allowed.length) {
+      } else if (!allowed.length && !useTools) {
         turn.result = { status: input.useModel ? 'cloud_grant_required' : 'local_evidence', answer: '', evidence: matches };
       } else {
         if (!model) fail('model_unavailable', 503);
         turn.evidence = allowed.map(item => item.id);
-        const result = await callModel(model, allowed, turn.question, turn.controller.signal, fetchModel);
+        let result;
+        let activity;
+        if (useTools) {
+          const response = await runTools({ db, workspace, knowledge, sheets, model, question: turn.question,
+            selected: input.sourceIds, target, initial: allowed, key: value.id + ':' + turn.id,
+            signal: turn.controller.signal, request: (model, messages, options) => requestModel(model, messages, { ...options, fetchModel }),
+            publishEvidence: items => { turn.evidence = items.map(item => item.id); } });
+          allowed = response.evidence;
+          activity = response.activity;
+          result = response.exhausted ? { answer: '', citations: [], supplement: '', tokens: response.budget.tokens }
+            : parseAnswer({ content: response.content, tokens: response.budget.tokens }, allowed);
+          if (response.exhausted) turn.toolBudgetExhausted = true;
+        } else result = await callModel(model, allowed, turn.question, turn.controller.signal, fetchModel);
         if (turn.controller.signal.aborted || !allowed.every(knowledge.cloudAllowed)) fail('cloud_grant_required', 403);
         turn.modelEvidence = allowed.map(({ id, revision }) => ({ id, revision }));
         if (!result.answer.trim() || !result.citations.length) {
-          turn.result = { status: 'no_evidence', answer: '', evidence: [] };
+          turn.result = { status: turn.toolBudgetExhausted ? 'tool_budget_exhausted'
+            : activity?.some(item => item.status === 'queued') ? 'sheet_queued' : 'no_evidence',
+            answer: '', evidence: [], activity };
         } else {
           turn.result = { status: 'answered', answer: result.answer, supplement: result.supplement,
             limited: allowed.length < matches.length,
-            evidence: allowed.filter(item => result.citations.includes(item.id)), tokens: result.tokens };
+            evidence: allowed.filter(item => result.citations.includes(item.id)), tokens: result.tokens, activity };
         }
       }
       turn.state = 'completed';
@@ -189,7 +216,11 @@ function createAssistant({ db, owner, storage, trashRoot, languagePath, token, m
         typeof input.question !== 'string' || !input.question.trim() || input.question.length > 2048 ||
         (input.sourceIds !== undefined && (!Array.isArray(input.sourceIds) || input.sourceIds.length > 16 ||
           input.sourceIds.some(item => typeof item !== 'string')))) fail('invalid_input');
-    const fingerprint = JSON.stringify([input.question, input.modelId, input.useModel, input.sourceIds]);
+    if (input.toolTarget !== undefined) {
+      if (input.enableTools !== true || input.useModel !== true || !workspace || !sheets?.enabled) fail('capability_disabled', 503);
+      allowedTarget(input.toolTarget);
+    }
+    const fingerprint = JSON.stringify([input.question, input.modelId, input.useModel, input.sourceIds, input.enableTools, input.toolTarget]);
     const prior = value.turns.find(turn => turn.id === id);
     if (prior) {
       if (prior.fingerprint !== fingerprint) fail('idempotency_conflict', 409);
@@ -220,8 +251,33 @@ function createAssistant({ db, owner, storage, trashRoot, languagePath, token, m
           (req.headers.origin && !allowedOrigins.has(req.headers.origin)) ||
           req.headers['x-campus-account']) fail('outside_scope', 403);
       if (!sameToken(req.headers.authorization, 'Bearer ' + token)) fail('unauthorized', 401);
+      if (endpoint === '/sheet-tasks' || endpoint.startsWith('/sheet-tasks/')) {
+        if (!workspace || !sheets?.enabled) fail('capability_disabled', 503);
+        if (endpoint === '/sheet-tasks' && method === 'GET') return send(200, { items: sheets.listTasks().map(mapTask) });
+        if (endpoint === '/sheet-tasks' && method === 'POST') {
+          const input = await requestBody(req);
+          return send(202, mapTask(sheets.prepareFillPlan({ target: input.target, requestId: input.clientRequestId })));
+        }
+        const match = endpoint.match(/^\/sheet-tasks\/([1-9]\d*)(\/.*)?$/);
+        if (!match) fail('not_found', 404);
+        const task = sheets.taskFor(Number(match[1]));
+        // 同一任务控制器负责审批和核对。外层已经通过工作区鉴权，账号来自任务而非请求。
+        const handler = createV2Handler({ tasks: sheets.tasks, jobs: sheets.jobs,
+          config: { token, account_id: task.account_ref, execute: sheets.execute } });
+        const response = {
+          statusCode: 200,
+          setHeader() {},
+          end(raw) {
+            const payload = JSON.parse(raw);
+            send(this.statusCode, this.statusCode >= 400 ? payload.error : payload);
+          }
+        };
+        if (!await handler(req, response, '/v1/tasks/' + match[1] + (match[2] || ''), url.searchParams)) fail('not_found', 404);
+        return;
+      }
       if (method === 'GET') {
-        if (endpoint === '/capabilities') return send(200, { enabled: true, models: models.map(({ id, label }) => ({ id, label })), effortPresets: presets });
+        if (endpoint === '/capabilities') return send(200, { enabled: true, tools: !!workspace, sheets: !!(workspace && sheets?.enabled),
+          models: models.map(({ id, label }) => ({ id, label })), effortPresets: presets });
         if (endpoint === '/research') return send(200, { items: research.list() });
         const researchRead = endpoint.match(/^\/research\/([a-f0-9-]+)(\/artifacts)?$/);
         if (researchRead) {
@@ -238,6 +294,11 @@ function createAssistant({ db, owner, storage, trashRoot, languagePath, token, m
         if (endpoint === '/grants') return send(200, { items: knowledge.grants() });
         if (endpoint === '/todos') return send(200, { items: knowledge.todos() });
         if (endpoint === '/profile') return send(200, { items: knowledge.profile() });
+        if (endpoint === '/messages' && workspace) return send(200, { items: listAuthorizedMessages(db, workspace, {
+          limit: Number(url.searchParams.get('limit') || 10),
+          before: Number(url.searchParams.get('before')),
+          text: url.searchParams.get('text')
+        }) });
         if (endpoint === '/sessions') return send(200, { items: [...sessions.values()].map(value => ({ id: value.id, state: value.state })) });
         const match = endpoint.match(/^\/(roots|knowledge|evidence|previews|operations|sessions)\/([a-zA-Z0-9_-]+)(\/entries)?$/);
         if (!match) fail('not_found', 404);
@@ -298,18 +359,19 @@ function createAssistant({ db, owner, storage, trashRoot, languagePath, token, m
   };
 }
 
-function startAssistant({ db, owner, port, oldToken }) {
+function startAssistant({ db, port, oldToken, sheets }) {
   try {
     const settings = readAssistantConfig();
     if (!settings) return null;
     const token = process.env[settings.tokenName];
-    if (!owner || !ready(db) || !token || !/^[a-zA-Z0-9_-]{43,128}$/.test(token) || token === oldToken) return null;
+    const workspace = resolveWorkspace(db);
+    if (!workspace || !ready(db) || !token || !/^[a-zA-Z0-9_-]{43,128}$/.test(token) || token === oldToken) return null;
     const [major, minor, patch] = db.prepare('SELECT sqlite_version() AS version').get().version.split('.').map(Number);
     // 旧服务的兼容范围更宽。助手启用时要求已修复 WAL reset 的 SQLite。
     if (!process.version.startsWith('v24.') || major < 3 ||
         (major === 3 && (minor < 51 || (minor === 51 && patch < 3)))) return null;
     const trashRoot = settings.trashRoot ? checkedAbsolute(settings.trashRoot) : undefined;
-    return createAssistant({ db, owner, storage: fs.realpathSync('.private/kb'), trashRoot,
+    return createAssistant({ db, owner: workspace.id, workspace, sheets, storage: fs.realpathSync('.private/kb'), trashRoot,
       languagePath: path.resolve('.private/ocr'), token, models: settings.models, port });
   } catch {
     // 助手配置损坏时，旧服务仍可正常启动。

@@ -15,11 +15,14 @@
   <a href="#preview">Preview</a> ·
   <a href="#features">Features</a> ·
   <a href="#quick-start">Quick Start</a> ·
+  <a href="#changelog">Changelog</a> ·
   <a href="#validation-and-limitations">Limitations</a> ·
   <a href="#project-layout-and-documentation">Documentation</a>
 </p>
 
 **Campus Desk** is a personal campus assistant. It turns selected QQ messages into task suggestions and prepares Tencent Docs spreadsheet plans for review on desktop or Android. The desktop also includes a local knowledge base with source citations and a multi-agent **Deeper Research** workspace.
+
+The local workspace can run independently of QQ. Python commands handle initialization, imports, and startup. Enable QQ, spreadsheet workflows, and briefings as needed.
 
 This is a **single-user, single-host development prototype**, primarily validated on Windows. The Android client is at **0.5.0**. KDocs support is still being assessed for technical feasibility.
 
@@ -83,6 +86,7 @@ The actual desktop message center brings together original updates, attachments,
 | Knowledge Q&A | Ask questions about notes and profile fields. Grant model access to selected material to generate answers with source citations. |
 | Tasks and profile | Approve source admission when keeping a task, or admit sources from existing tasks in batches. Completed or deleted tasks leave search. Approved profile changes trigger fresh preparation and approval of affected spreadsheet plans. |
 | Deeper Research | Configure two to four agents to explore independently, review each other's findings, revise, and compare results. Set limits for tokens, calls, rounds, and active time. Pause, resume, cancel, or add requirements. |
+| Workspace spreadsheets and model tools | Submit a Tencent spreadsheet URL from the desktop to prepare a plan. Opt in to tools during Q&A to query authorized sources or prepare the spreadsheet you specify. Edits still require approval. |
 
 Research runs in the host process. Reopen the desktop window to check progress. Saving a report requires approval of a write preview, and the host releases unsaved research when it exits.
 
@@ -96,7 +100,7 @@ Research runs in the host process. Reopen the desktop window to check progress. 
 | --- | --- |
 | Android | Kotlin / Jetpack Compose; Keystore-encrypted device tokens; review, input, and approval |
 | Desktop | React / TypeScript / Vite; Tauri 2 Windows shell with Credential Manager |
-| Host | Node.js 24 / SQLite FTS5 / Playwright; message processing, document search, research, and spreadsheet execution |
+| Host | Python workspace commands and policy rules; Node.js 24, SQLite FTS5, and Playwright for the online host, research, and spreadsheet execution |
 | Private network | Tailscale Serve HTTPS and Android userspace tsnet; separate application device pairing |
 | Models and attachments | Configure Chat Completions compatible models in a local file; PDF / DOCX extraction and local Tesseract OCR for images and scanned pages |
 
@@ -114,6 +118,7 @@ flowchart LR
     L --> R[Local search and citations]
     R -->|Grant model access| S[Q&A or Deeper Research]
     H --> P[Prepare a plan without writing]
+    M[Submit spreadsheet URL on desktop] --> P
     P --> A[Review and approve on phone or desktop]
     A --> W[Host rechecks and writes]
     W --> V[Read back or mark outcome unknown]
@@ -125,7 +130,7 @@ Keeping a task does not approve a spreadsheet edit. If the outcome becomes uncer
 
 ### Requirements
 
-- Backend uses Node.js 24 and npm. The desktop knowledge base is validated on **Node.js 24.22.2 / SQLite 3.53.4**. Real Tencent spreadsheet execution uses an installed Microsoft Edge browser.
+- Workspace commands require **Python 3.11+**. The existing host and desktop build use Node.js 24 and npm. The knowledge base adapter is validated on **Node.js 24.22.2 / SQLite 3.53.4**. Real Tencent spreadsheet execution uses Microsoft Edge.
 - Desktop web: npm dependencies in both the repository root and `desktop/`. Building the Tauri shell also requires the Rust MSVC toolchain and WebView2.
 - Android: JDK 21 and Android SDK 36. Rebuilding the embedded transport also requires Go and the NDK; see the build scripts and `mobile/tsnet-probe/go/go.mod` for versions.
 - Real use: configure your own QQ / NapCat setup, dedicated Tencent Docs login session, personal profile, and DeepSeek API access. Private phone access additionally requires Tailscale configuration and device pairing.
@@ -147,13 +152,13 @@ The first two commands install backend and desktop dependencies from their lockf
 
 ### Use desktop knowledge search and research
 
-Prepare the local database, pinned runtime, and documents using the [knowledge base setup and import guide (Chinese)](docs/setup.md#桌面知识库). On a configured Windows host, run the following command to start the local knowledge service. `-CopyDesktopToken` copies the separate connection token for first use.
+Prepare the pinned runtime using the [knowledge base setup and import guide (Chinese)](docs/setup.md#桌面知识库). Run `python -m campusdesk init` for a new workspace, or follow the backup and migration steps for an existing database. The following command starts the local knowledge service. `--copy-token` copies the separate connection token for first use.
 
 ```powershell
-.\tools\start-assistant.ps1 -CopyDesktopToken
+python -m campusdesk serve --copy-token
 ```
 
-Keep the service terminal open. Open the knowledge base in the Campus Desk sidebar, paste the token, and connect. Local search is available after import. Approve model access to the material you want to use in model Q&A or research. See the [same guide](docs/setup.md#桌面知识库) for running the QQ and spreadsheet workers alongside the knowledge service.
+Keep the service terminal open. Open the knowledge base in the sidebar, paste the token, and connect. Approve model access to selected material for model Q&A or research. Add `--sheets` for spreadsheet preparation, `--qq` for QQ ingress, or `--briefings` for briefings. Review the execution setting and approved tasks before enabling spreadsheet workers. [Combined startup guide (Chinese)](docs/setup.md#桌面知识库)
 
 ### Configure real use before starting
 
@@ -203,6 +208,7 @@ See the [Android guide (Chinese)](mobile/android/README.md) for details. The cur
 ## Project Layout and Documentation
 
 ```text
+campusdesk/             Python workspace, migration, message policies, and model tools
 src/                    Host APIs, knowledge base, research, message processing, and spreadsheet execution
 mobile/android/         Native Android client and tests
 mobile/tsnet-probe/go/   Shared userspace private-network bridge source
@@ -216,6 +222,24 @@ docs/                   Runtime guides, usage limitations, and README images
 - [Android build and usage (Chinese)](mobile/android/README.md) / [desktop development (Chinese)](desktop/README.md)
 - [Usage limitations and data handling](docs/validation-and-data.en.md)
 - [Image provenance and reproduction (Chinese)](docs/images/readme/README.md)
+
+## Changelog
+
+### 2026-11-06 · Local workspace and Python commands
+
+- Initialize, import, and search a knowledge base independently of QQ. Use Python for workspace setup, migration, and capability selection.
+- Use one message ingestion service for QQ callbacks and history import. Authorized history stays available when ingress is disabled.
+- Prepare spreadsheet plans from desktop submissions or QQ messages through the same workflow. Q&A offers opt-in tools for authorized lookup and spreadsheet preparation.
+
+### 2026-11-05 · Knowledge base, task integration, and research
+
+- Added desktop imports, local search, citations, and model Q&A with source authorization.
+- Added approval-based task source admission and preparation of fresh spreadsheet plans after relevant profile changes.
+- Added the Deeper Research workspace with agent discussion, budgets, controls, and report previews.
+
+### 2026-11-03 · Android workspace
+
+- Added Android task management, technology briefings, spreadsheet plan review, and separate device pairing.
 
 ## License
 

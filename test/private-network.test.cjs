@@ -52,7 +52,7 @@ async function listen(t,server){
   t.after(()=>new Promise(resolve=>{server.close(resolve);server.closeAllConnections();}));
   return `http://127.0.0.1:${server.address().port}`;
 }
-async function fixture(t){
+async function fixture(t,{authorizeAccount}={}){
   const {devices,advance}=repository(t),seen=[];
   const upstream=http.createServer(async(req,res)=>{
     let body='';for await(const chunk of req)body+=chunk;
@@ -63,7 +63,7 @@ async function fixture(t){
   });
   await listen(t,upstream);
   const config={account_id:'account-a',port:upstream.address().port,token:'owner-secret-not-a-device-token-xxxxxxxxxxx'};
-  const gateway=createGateway({devices,getConfig:()=>config}),base=await listen(t,gateway);
+  const gateway=createGateway({devices,getConfig:()=>config,authorizeAccount}),base=await listen(t,gateway);
   const code=devices.invite(config.account_id).code;
   const token=devices.redeem(code,'手机',config.account_id).token;
   const request=(path,options={})=>fetch(base+path,{...options,redirect:'manual',headers:{Authorization:'Bearer '+token,...options.headers}});
@@ -101,6 +101,11 @@ test('gateway: read-only device cannot mutate and revoked device fails immediate
 test('gateway: account changes stop old device before upstream access',async t=>{
   const {config,request,seen}=await fixture(t);config.account_id='account-b';
   assert.equal((await request('/v1/tasks')).status,401);assert.equal(seen.length,0);
+});
+test('gateway: revoked workspace binding blocks an existing paired device',async t=>{
+  const {request,seen}=await fixture(t,{authorizeAccount:()=>false});
+  assert.equal((await request('/v1/tasks')).status,403);
+  assert.equal(seen.length,0);
 });
 test('gateway: concurrent pairing succeeds exactly once and rejects invalid JSON',async t=>{
   const {devices,config,base}=await fixture(t),code=devices.invite(config.account_id).code;

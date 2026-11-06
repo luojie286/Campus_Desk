@@ -49,7 +49,7 @@ function createSourceRepository(db){
     matchEvent(event,{accountRef}){
       if(event.post_type!=='message')return null;
       if(String(event.self_id)!==String(accountRef))return null;
-      const rows=db.prepare('SELECT * FROM sources WHERE account_ref=? AND enabled=1 ORDER BY created_at DESC,id DESC')
+      const rows=db.prepare("SELECT * FROM sources WHERE account_ref=? AND platform='qq' AND enabled=1 ORDER BY created_at DESC,id DESC")
         .all(String(accountRef));
       return rows.find(row=>{
         if(row.conversation_type==='private'){
