@@ -3,6 +3,21 @@ const assert=require('node:assert/strict');
 const {chromium}=require('playwright');
 const {run}=require('../tools/python-sheet-adapter.cjs');
 
+test('Python sheet bridge: preserves safe read errors and suppresses unknown details',async()=>{
+  const input={action:'probe',target:'https://docs.qq.com/sheet/synthetic'};
+  const createSheet=message=>()=>({
+    async open(){},
+    async readUsedRange(){throw Error(message);},
+    async close(){}
+  });
+  for(const [message,code] of [
+    ['sheet_grid_focus_failed','sheet_grid_focus_failed'],
+    ['unexpected detail','sheet_adapter_failed']
+  ]){
+    assert.deepEqual(await run(input,{},createSheet(message)),{ok:false,attempted:false,code});
+  }
+});
+
 test('Python sheet bridge: synthetic page preparation, final authorization, independent readback',
   {skip:process.env.LAB1_ASSISTANT_BROWSER_FIXTURE!=='1'},async()=>{
     const browser=await chromium.launch({channel:'msedge',headless:true});

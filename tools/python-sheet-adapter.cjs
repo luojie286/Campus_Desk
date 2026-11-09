@@ -16,7 +16,8 @@ const safeErrors=new Set(['login_required','execute_disabled','identity_not_foun
   'identity_not_unique','identity_columns_ambiguous','identity_changed','target_changed','target_row_changed',
   'target_row_not_empty','header_changed','plan_not_current','plan_has_warnings','profile_missing','profile_changed',
   'placeholder_changed','reserved_student_cell_not_empty','existing_value_conflict','deepseek_api_key_missing',
-  'document_read_only_or_login_required','document_login_window_open_close_it_first','write_not_verified','readback_mismatch']);
+  'document_read_only_or_login_required','document_login_window_open_close_it_first','write_not_verified','readback_mismatch',
+  'sheet_grid_focus_failed','sheet_grid_not_found','clipboard_empty','clipboard_read_failed']);
 
 function identityDigest(plan, grid, changes=[]){
   const values=[plan.nameCol,plan.studentCol].map(col=>{
