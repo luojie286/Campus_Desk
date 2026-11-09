@@ -7,8 +7,8 @@
 </p>
 
 <p align="center">
-  <strong>Turn campus updates into tasks and ask questions about your own notes.</strong><br>
-  Organize documents and run research on the desktop. Review spreadsheet plans on desktop or Android.
+  <strong>Open Campus Desk and start a conversation with your knowledge base.</strong><br>
+  Run research, organize QQ updates, and review spreadsheet plans on the desktop.
 </p>
 
 <p align="center">
@@ -20,17 +20,23 @@
   <a href="#project-layout-and-documentation">Documentation</a>
 </p>
 
-**Campus Desk** is a personal campus assistant. It turns selected QQ messages into task suggestions and prepares Tencent Docs spreadsheet plans for review on desktop or Android. The desktop also includes a local knowledge base with source citations and a multi-agent **Deeper Research** workspace.
+**Campus Desk** is a personal campus workbench. The desktop opens to a pink AI chat with local knowledge search and source citations. The sidebar opens **Deeper Research**, the QQ inbox, and tasks and spreadsheet plans.
 
-The local workspace can run independently of QQ. Python commands handle initialization, imports, and startup. Enable QQ, spreadsheet workflows, and briefings as needed.
+The Python host manages local retrieval, model orchestration, and workflow state. QQ and spreadsheets can be enabled separately. The legacy Android client has its own interface.
 
 This is a **single-user, single-host development prototype**, primarily validated on Windows. The Android client is at **0.5.0**. KDocs support is still being assessed for technical feasibility.
 
 ## Preview
 
-### Desktop knowledge base and Deeper Research
+### Pink AI chat home
 
-Open citations in a knowledge base answer to check the source excerpt and its page or line.
+The desktop starts with suggested prompts and a message composer. Open the local workbench connection when setting up the app for the first time.
+
+<img src="docs/images/readme/desktop-chat.png" alt="Pink Campus Desk AI chat home with suggested prompts, a message composer, and workspace navigation." width="100%">
+
+### Source citations and Deeper Research
+
+Chat searches the local knowledge base by default. Open the Q&A options to select sources or let a model summarize approved excerpts. Select a citation to check its text and location.
 
 <img src="docs/images/readme/desktop-knowledge.png" alt="Desktop knowledge Q&A with a synthetic answer, two citations, and an expanded PDF excerpt." width="100%">
 
@@ -38,13 +44,13 @@ Deeper Research shows budget usage, the best report so far, and the agents’ re
 
 <img src="docs/images/readme/desktop-research.png" alt="Desktop Deeper Research with a synthetic report, source citations, budget usage, and agent review." width="100%">
 
-### Organize on your computer. Decide on your phone.
+### Desktop message records and legacy Android previews
 
-The actual desktop message center brings together original updates, attachments, merged task suggestions, and spreadsheet approval requests.
+The desktop retains a business-records section. The message center below shows synthetic updates, attachments, and task suggestions.
 
 <img src="docs/images/readme/desktop-inbox.png" alt="Desktop message center showing synthetic course updates, a merged task suggestion, a spreadsheet approval link, and an extracted PDF attachment." width="100%">
 
-### Review incoming items, approve a plan, and manage your tasks
+### Legacy Android workbench
 
 <table>
   <tr>
@@ -83,10 +89,10 @@ The actual desktop message center brings together original updates, attachments,
 | Desktop feature | What you can do |
 | --- | --- |
 | Personal knowledge base | Import Markdown, TXT, DOCX, PDF, PNG, and JPEG. Text extraction and OCR run locally. Open search results at a source excerpt and its page, paragraph, or line. |
-| Knowledge Q&A | Ask questions about notes and profile fields. Grant model access to selected material to generate answers with source citations. |
+| AI chat | Search local notes and profile fields by default. Use the Q&A options to select sources or generate a cited answer from approved excerpts. |
 | Tasks and profile | Approve source admission when keeping a task, or admit sources from existing tasks in batches. Completed or deleted tasks leave search. Approved profile changes trigger fresh preparation and approval of affected spreadsheet plans. |
 | Deeper Research | Configure two to four agents to explore independently, review each other's findings, revise, and compare results. Set limits for tokens, calls, rounds, and active time. Pause, resume, cancel, or add requirements. |
-| Workspace spreadsheets and model tools | Submit a Tencent spreadsheet URL from the desktop to prepare a plan. Opt in to tools during Q&A to query authorized sources or prepare the spreadsheet you specify. Edits still require approval. |
+| Tasks and spreadsheets | Open tasks from the sidebar or submit a Tencent spreadsheet URL to prepare a plan. Review the target and proposed changes before approval. The host writes and reads back the cells. |
 
 Research runs in the host process. Reopen the desktop window to check progress. Saving a report requires approval of a write preview, and the host releases unsaved research when it exits.
 
@@ -100,11 +106,11 @@ Research runs in the host process. Reopen the desktop window to check progress. 
 | --- | --- |
 | Android | Kotlin / Jetpack Compose; Keystore-encrypted device tokens; review, input, and approval |
 | Desktop | React / TypeScript / Vite; Tauri 2 Windows shell with Credential Manager |
-| Host | Python workspace commands and policy rules; Node.js 24, SQLite FTS5, and Playwright for the online host, research, and spreadsheet execution |
+| Host | Python and SQLite FTS5 for the workbench, research, and approvals; Node.js 24 and Playwright for the Tencent spreadsheet adapter |
 | Private network | Tailscale Serve HTTPS and Android userspace tsnet; separate application device pairing |
 | Models and attachments | Configure Chat Completions compatible models in a local file; PDF / DOCX extraction and local Tesseract OCR for images and scanned pages |
 
-The phone does not operate QQ or the document browser directly. The host service and gateway bind to loopback addresses, and the phone connects over the private network. The embedded Android transport does not use the system `VpnService`; connectivity has been verified on one phone while its existing VPN remained active.
+The Python desktop host binds to loopback. Private network access in the legacy Android setup uses a separate gateway and device pairing.
 
 ## Workflow
 
@@ -112,14 +118,14 @@ The phone does not operate QQ or the document browser directly. The host service
 flowchart LR
     Q[Selected QQ sources] --> H[Host storage and analysis]
     H --> T[Merge task suggestions]
-    T --> K[Keep on desktop or Android]
+    T --> K[Confirm on desktop]
     K -->|Approve source admission| L[Local knowledge base]
     D[Import documents] --> L
     L --> R[Local search and citations]
     R -->|Grant model access| S[Q&A or Deeper Research]
-    H --> P[Prepare a plan without writing]
+    K --> P[Prepare a plan without writing]
     M[Submit spreadsheet URL on desktop] --> P
-    P --> A[Review and approve on phone or desktop]
+    P --> A[Review and approve on desktop]
     A --> W[Host rechecks and writes]
     W --> V[Read back or mark outcome unknown]
 ```
@@ -130,7 +136,7 @@ Keeping a task does not approve a spreadsheet edit. If the outcome becomes uncer
 
 ### Requirements
 
-- Workspace commands require **Python 3.11+**. The existing host and desktop build use Node.js 24 and npm. The knowledge base adapter is validated on **Node.js 24.22.2 / SQLite 3.53.4**. Real Tencent spreadsheet execution uses Microsoft Edge.
+- Workspace commands require **Python 3.11+**. The desktop build and compatibility adapters use Node.js 24 and npm. The pinned Windows runtime is **Node.js 24.22.2**. Real Tencent spreadsheet execution uses Microsoft Edge.
 - Desktop web: npm dependencies in both the repository root and `desktop/`. Building the Tauri shell also requires the Rust MSVC toolchain and WebView2.
 - Android: JDK 21 and Android SDK 36. Rebuilding the embedded transport also requires Go and the NDK; see the build scripts and `mobile/tsnet-probe/go/go.mod` for versions.
 - Real use: configure your own QQ / NapCat setup, dedicated Tencent Docs login session, personal profile, and DeepSeek API access. Private phone access additionally requires Tailscale configuration and device pairing.
@@ -160,7 +166,7 @@ python -m venv .venv
 .\tools\start-python-workbench.ps1 -CopyToken
 ```
 
-The first two commands create an isolated Python environment and install dependencies. The last command starts the loopback workbench and copies its token. Open the desktop knowledge base and paste the token to connect. Model calls use the host's DeepSeek configuration and environment. Use `python -m campusdesk knowledge-cloud <document-id> allow` or the legacy document manager to approve cloud processing for specific material.
+The first two commands create an isolated Python environment and install dependencies. The last command starts the loopback workbench and copies its token. From AI chat, open the local workbench connection and paste the token. Model calls use the host's DeepSeek configuration and environment. Use `python -m campusdesk knowledge-cloud <document-id> allow` or the legacy document manager to approve cloud processing for specific material.
 
 After cutover, `serve` starts the Python workbench by default. Use `python -m campusdesk serve --legacy-assistant --copy-token` for the legacy document manager. This mode starts no QQ, spreadsheet, or briefing workers.
 
@@ -181,10 +187,10 @@ Host configuration lives in `.private/config.json`; profiles and tasks live in `
 First-run configuration does not include a real spreadsheet address. Set your own authorized test spreadsheet in the local configuration.
 
 ```powershell
-npm start
+.\.venv\Scripts\python.exe -m campusdesk serve --qq --sheets
 ```
 
-This starts the host service on `127.0.0.1:9087`; keep the terminal open. It initializes or migrates the local database and starts workers according to the current configuration. An existing installation may have execution enabled and previously approved tasks queued, so check the configuration and tasks before starting. Starting the service is not a read-only inspection.
+After cutover, this starts the Python workbench on `127.0.0.1:9089` with QQ ingress and read-only spreadsheet preparation. Keep the terminal open.
 
 Open another terminal for the desktop development UI:
 
@@ -236,6 +242,11 @@ docs/                   Runtime guides, usage limitations, and README images
 - [Image provenance and reproduction (Chinese)](docs/images/readme/README.md)
 
 ## Changelog
+
+### 2026-11-09 · Pink AI chat home
+
+- The desktop opens directly to AI chat with suggested prompts, citations, and Q&A options.
+- The sidebar opens Deeper Research, the QQ inbox, and tasks and spreadsheets.
 
 ### 2026-11-06 · Local workspace and Python commands
 

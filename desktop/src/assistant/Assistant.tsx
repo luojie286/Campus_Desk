@@ -4,6 +4,7 @@ import {readCredentials} from '../api';
 import {isTauriApp} from '../secure';
 import Research from './Research';
 import PythonWorkspace from './PythonWorkspace';
+import type {WorkspaceView} from './PythonWorkspace';
 import SheetWorkspace from './SheetWorkspace';
 import type {SheetTaskRenderer} from './SheetWorkspace';
 import type {EffortPresets} from './Research';
@@ -69,25 +70,26 @@ type TodoItem = {id: number; title: string; admitted: number};
 type Field = {key: string; value: string};
 const profileLabels: Record<string, string> = {name: '姓名', student_id: '学号', sex: '性别', age: '年龄', major: '专业', phone: '电话', email: '邮箱'};
 
-type AssistantProps = {
+type LegacyAssistantProps = {
   candidate?: number; onCandidateDone?: () => void; renderSheetTask: SheetTaskRenderer;
+};
+type AssistantProps = LegacyAssistantProps & {
+  workspaceView: WorkspaceView; legacy: boolean; onLegacyChange: (legacy: boolean) => void;
 };
 
 export default function Assistant(props: AssistantProps) {
-  const [legacy, setLegacy] = useState(false);
-  const showLegacy = legacy || props.candidate !== undefined;
+  const showLegacy = props.legacy || props.candidate !== undefined;
+  if (!showLegacy) return <PythonWorkspace renderSheetTask={props.renderSheetTask}
+    view={props.workspaceView} onOpenLegacy={() => props.onLegacyChange(true)} />;
   return <div className="stack">
-    <div className="assistant-actions">
-      <button className="button" type="button" disabled={!showLegacy} onClick={() => {
-        props.onCandidateDone?.(); setLegacy(false);
-      }}>Python 知识工作台</button>
-      <button className="button" type="button" disabled={showLegacy} onClick={() => setLegacy(true)}>旧版资料管理与工具</button>
-    </div>
-    {showLegacy ? <LegacyAssistant {...props} /> : <PythonWorkspace renderSheetTask={props.renderSheetTask} />}
+    <div className="assistant-actions"><button className="button" type="button" onClick={() => {
+      props.onCandidateDone?.(); props.onLegacyChange(false);
+    }}>返回 Python 知识工作台</button></div>
+    <LegacyAssistant {...props} />
   </div>;
 }
 
-function LegacyAssistant({candidate, onCandidateDone, renderSheetTask}: AssistantProps) {
+function LegacyAssistant({candidate, onCandidateDone, renderSheetTask}: LegacyAssistantProps) {
   const [token, setToken] = useState(browserToken);
   const [tokenDraft, setTokenDraft] = useState('');
   const [models, setModels] = useState<Model[]>([]);

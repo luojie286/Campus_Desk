@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "课桌 · 消息与审批",
+        "title": "课桌 · AI 聊天",
         "width": 1280,
         "height": 860,
         "minWidth": 900,

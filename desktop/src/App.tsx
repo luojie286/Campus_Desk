@@ -2,6 +2,7 @@ import {useCallback, useEffect, useMemo, useState} from 'react';
 import type {FormEvent} from 'react';
 import {
   Bell,
+  BookOpen,
   CheckCircle2,
   ChevronRight,
   CircleAlert,
@@ -10,6 +11,7 @@ import {
   Inbox,
   Link2,
   ListTodo,
+  MessageCircle,
   Plus,
   RefreshCw,
   Search,
@@ -24,6 +26,7 @@ import {
 } from 'lucide-react';
 import * as api from './api';
 import Assistant from './assistant/Assistant';
+import type {WorkspaceView} from './assistant/PythonWorkspace';
 import type {ContactFriend, ContactGroup, ContactMember, ListenSource, Message, Notification, Plan, SourceRow, Suggestion, Task, Todo, View} from './types';
 
 const REFRESH_MS = 5000;
@@ -152,7 +155,9 @@ function toneFor(value: string) {
 }
 
 function App() {
-  const [view, setView] = useState<View>('inbox');
+  const [view, setView] = useState<View>('assistant');
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('chat');
+  const [legacyAssistant, setLegacyAssistant] = useState(false);
   const [assistantCandidate, setAssistantCandidate] = useState<number>();
   const [sources, setSources] = useState<SourceRow[]>([]);
   const [listenSources, setListenSources] = useState<ListenSource[]>([]);
@@ -391,7 +396,13 @@ function App() {
     },
     todos: {title: '待办清单', subtitle: '保留的候选会进入这里，但不会自动执行', icon: ListTodo},
     approvals: {title: '审批请求', subtitle: '文档填写任务在批准后才会写入', icon: FileCheck2},
-    assistant: {title: '个人知识库', subtitle: '导入资料、查阅原文并提问', icon: Sparkles},
+    assistant: {
+      title: legacyAssistant || assistantCandidate !== undefined ? '旧版资料管理' : {
+        chat: 'AI 聊天', research: '深度研究', qq: 'QQ 收件箱', business: '待办与填表'
+      }[workspaceView],
+      subtitle: workspaceView === 'chat' ? '个人知识库 · 对话工作台' : '课桌工作区',
+      icon: Sparkles
+    },
     settings: {title: '连接设置', subtitle: '连接本机后台并管理访问令牌', icon: Settings}
   }[view];
   const HeaderIcon = viewMeta.icon;
@@ -400,29 +411,34 @@ function App() {
     setAssistantCandidate(id);
     setView('assistant');
   }
+  function openWorkspace(next: WorkspaceView) {
+    setAssistantCandidate(undefined);
+    setLegacyAssistant(false);
+    setWorkspaceView(next);
+    setView('assistant');
+  }
   const placeholder = view === 'inbox' ? '搜索消息、发送者或文件名' : view === 'todos' ? '搜索待办' : view === 'approvals' ? '搜索任务或文档链接' : '搜索当前视图';
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${view === 'assistant' ? 'is-workspace' : ''}`}>
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <div className="brand-logo">课</div>
+          <div className="brand-logo"><Sparkles size={19} aria-hidden="true" /></div>
           <div className="brand-copy">
             <strong>课桌</strong>
-            <span>消息与审批</span>
+            <span>个人 AI 工作台</span>
           </div>
           <button className="icon-button subtle" onClick={() => setView('settings')} aria-label="打开设置">
             <Settings size={17} />
           </button>
         </div>
 
-        <div className="sidebar-search">
+        {view === 'inbox' && <><div className="sidebar-search">
           <Search size={15} />
           <input value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索消息或文件" />
         </div>
 
         <div className="sidebar-actions">
-          <button className="icon-button subtle" title="个人知识库" onClick={() => setView('assistant')} aria-label="个人知识库"><Sparkles size={17} /></button>
           <button className="new-button" onClick={() => setView('settings')}>
             <Plus size={15} />
             <span>连接来源</span>
@@ -430,9 +446,9 @@ function App() {
           <button className="icon-button subtle" onClick={() => refresh()} disabled={busy} aria-label="刷新">
             <RefreshCw size={16} className={busy ? 'spin' : ''} />
           </button>
-        </div>
+        </div></>}
 
-        <div className="sidebar-section">
+        {view === 'inbox' && <div className="sidebar-section">
           <div className="section-label">来源</div>
           <button
             className={`source-item ${selectedConversation === null ? 'is-active' : ''}`}
@@ -459,10 +475,23 @@ function App() {
               <span className={`source-count ${source.unread ? 'has-unread' : ''}`}>{source.unread || source.total}</span>
             </button>
           ))}
-        </div>
+        </div>}
 
-        <div className="sidebar-section workbench-section">
-          <div className="section-label">工作台</div>
+        <nav className="sidebar-section workbench-section" aria-label="工作台导航">
+          <div className="section-label">工作空间</div>
+          {([
+            ['chat', 'AI 聊天', MessageCircle],
+            ['research', '深度研究', BookOpen],
+            ['qq', 'QQ 收件箱', Inbox],
+            ['business', '待办与填表', FileCheck2]
+          ] as const).map(([key, label, Icon]) => {
+            const active = view === 'assistant' && !legacyAssistant && assistantCandidate === undefined && workspaceView === key;
+            return <button key={key} className={`nav-item workspace-nav ${active ? 'is-active' : ''}`}
+              aria-current={active ? 'page' : undefined} onClick={() => openWorkspace(key)}>
+              <Icon size={17} aria-hidden="true" /><span>{label}</span>
+            </button>;
+          })}
+          <div className="section-label legacy-nav-label">业务记录</div>
           <button className={`nav-item ${view === 'inbox' ? 'is-active' : ''}`} onClick={() => setView('inbox')}>
             <Inbox size={16} />
             <span>消息中心</span>
@@ -478,17 +507,17 @@ function App() {
             <span>审批请求</span>
             {activeTasks.length > 0 && <span className="nav-count">{activeTasks.length}</span>}
           </button>
-        </div>
+        </nav>
 
         <div className="sidebar-footer">
           <div className="status-line">
             <span className={`status-dot ${health === 'ok' ? 'is-ok' : health === 'down' ? 'is-down' : ''}`} />
-            <span>{health === 'ok' ? '本机后台在线' : health === 'down' ? '后台不可用' : '尚未连接'}</span>
+            <span>{health === 'ok' ? '旧版后台在线' : health === 'down' ? '旧版后台不可用' : '旧版后台未连接'}</span>
           </div>
           <button className={`profile-card ${view === 'settings' ? 'is-active' : ''}`} onClick={() => setView('settings')}>
             <span className="avatar profile-avatar">本</span>
             <span className="profile-copy">
-              <strong>本机后台</strong>
+              <strong>旧版后台</strong>
               <span>连接与令牌</span>
             </span>
             <Settings size={15} />
@@ -533,6 +562,7 @@ function App() {
             {view !== 'assistant' && error && <div className="callout callout-error" role="alert"><CircleAlert size={17} /><span>{error}</span></div>}
             {view !== 'assistant' && notice && <div className="callout callout-info"><CheckCircle2 size={17} /><span>{notice}</span></div>}
             {view === 'assistant' && <Assistant candidate={assistantCandidate} onCandidateDone={() => setAssistantCandidate(undefined)}
+              workspaceView={workspaceView} legacy={legacyAssistant} onLegacyChange={setLegacyAssistant}
               renderSheetTask={(task, actions, busy) => <TaskDetail task={task} busy={busy}
                 onApprove={actions.approve} onAnswer={actions.answer} onCancel={actions.cancel}
                 onReconcile={actions.reconcile} onResume={actions.resume} />} />}

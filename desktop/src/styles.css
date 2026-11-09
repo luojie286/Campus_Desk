@@ -1,24 +1,26 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650&family=Noto+Sans+SC:wght@400;500;600&display=swap');
 
 :root {
-  --bg: #f6f6f7;
-  --sidebar: #fbfbfc;
+  --bg: #fff8fb;
+  --sidebar: #fff2f7;
   --surface: #ffffff;
-  --text: #17181a;
-  --text-2: #3b3d43;
-  --muted: #8b8f98;
-  --line: #e8e8ec;
-  --line-strong: #d8d9df;
-  --soft: #f2f2f4;
-  --soft-2: #ebebef;
-  --black: #111111;
+  --text: #301e29;
+  --text-2: #543846;
+  --muted: #795e6d;
+  --line: #f1dce6;
+  --line-strong: #e5c6d6;
+  --soft: #fbe9f1;
+  --soft-2: #f5dce8;
+  --accent: #b72b65;
+  --accent-hover: #982253;
+  --accent-focus: #c74780;
   --orange: #c56a3e;
   --orange-soft: #fdf1e9;
   --green: #2f966b;
   --green-soft: #e8f6ef;
   --red: #c94b4b;
   --red-soft: #fbecec;
-  --blue: #5b72d9;
+  --blue: var(--accent);
   --radius: 18px;
   font-family: 'Inter', 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
   color: var(--text);
@@ -54,8 +56,11 @@ button {
 }
 
 button:focus-visible,
-input:focus-visible {
-  outline: 2px solid #a9b4ff;
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--accent-focus);
   outline-offset: 2px;
 }
 
@@ -91,7 +96,7 @@ input:focus-visible {
   color: #fff;
   font-size: 15px;
   font-weight: 600;
-  background: var(--black);
+  background: var(--accent);
   border-radius: 10px;
 }
 
@@ -189,8 +194,8 @@ input:focus-visible {
   color: #fff;
   font-size: 12px;
   font-weight: 500;
-  background: var(--black);
-  border: 1px solid var(--black);
+  background: var(--accent);
+  border: 1px solid var(--accent);
   border-radius: 10px;
   cursor: pointer;
 }
@@ -253,7 +258,7 @@ input:focus-visible {
 .avatar.all,
 .profile-avatar {
   color: #fff;
-  background: var(--black);
+  background: var(--accent);
 }
 
 .avatar.tone-0 {
@@ -932,12 +937,13 @@ input:focus-visible {
 
 .button.primary {
   color: #fff;
-  background: var(--black);
-  border-color: var(--black);
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .button.primary:hover:not(:disabled) {
-  background: #2b2b2b;
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
 .button.ghost {
@@ -1264,7 +1270,7 @@ input:focus-visible {
   height: 34px;
   flex: 0 0 34px;
   color: #fff;
-  background: var(--black);
+  background: var(--accent);
   border: 0;
   border-radius: 10px;
   cursor: pointer;

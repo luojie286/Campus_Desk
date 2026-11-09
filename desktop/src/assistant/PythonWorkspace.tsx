@@ -1,5 +1,6 @@
-import {useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {invoke} from '@tauri-apps/api/core';
+import {ArrowUp, BookOpen, Globe2, MessageCircle, SlidersHorizontal, Sparkles, X} from 'lucide-react';
 import {isTauriApp} from '../secure';
 import Research from './Research';
 import QQInbox from './QQInbox';
@@ -15,6 +16,9 @@ type Session = {id: string; state: string; seq: number; turns: {
   id: string; question: string; result?: {status: string; answer?: string; evidence: Evidence[]; abilityError?: string};
 }[]};
 type Report = {id: string; name: string; digest: string; text: string};
+export type WorkspaceView = 'chat' | 'research' | 'qq' | 'business';
+
+const prompts = ['帮我总结一份资料', '从知识库找出相关来源', '帮我梳理一个问题'];
 
 const labels: Record<string, string> = {
   no_evidence: '知识库没有找到相关资料。', local_evidence: '本机检索结果',
@@ -30,7 +34,9 @@ const labels: Record<string, string> = {
 };
 let browserToken = '';
 
-export default function PythonWorkspace({renderSheetTask}: {renderSheetTask: SheetTaskRenderer}) {
+export default function PythonWorkspace({renderSheetTask, view, onOpenLegacy}: {
+  renderSheetTask: SheetTaskRenderer; view: WorkspaceView; onOpenLegacy: () => void;
+}) {
   const [token, setToken] = useState(browserToken);
   const [draft, setDraft] = useState('');
   const [models, setModels] = useState<Model[]>([]);
@@ -41,16 +47,17 @@ export default function PythonWorkspace({renderSheetTask}: {renderSheetTask: She
   const [session, setSession] = useState<Session>();
   const [question, setQuestion] = useState('');
   const [cloud, setCloud] = useState(false);
-  const [research, setResearch] = useState(false);
   const [abilities, setAbilities] = useState<Ability[]>([]);
-  const [showQQ, setShowQQ] = useState(false);
-  const [showBusiness, setShowBusiness] = useState(false);
   const [business, setBusiness] = useState<{enabled: boolean; execute: boolean}>();
   const [webQuery, setWebQuery] = useState('');
   const [reference, setReference] = useState<Evidence>();
   const [report, setReport] = useState<Report>();
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [showConnection, setShowConnection] = useState(false);
+  const connectionInput = useRef<HTMLInputElement>(null);
+  const questionInput = useRef<HTMLTextAreaElement>(null);
+  const lastTurn = useRef<HTMLDivElement>(null);
 
   const request = useCallback(async <T,>(route: string, body?: unknown, signal?: AbortSignal): Promise<T> => {
     const prefix = route.startsWith('/evidence/') ? '/knowledge' : '/interaction';
@@ -132,9 +139,28 @@ export default function PythonWorkspace({renderSheetTask}: {renderSheetTask: She
 
   const searchEnabled = abilities.some(item => item.id === 'web.search' && item.state === 'available');
   const qqEnabled = abilities.some(item => item.id === 'qq.listen' && ['running', 'degraded'].includes(item.state));
+  const connected = Boolean(token && presets);
+  const waiting = session?.state === 'running';
+  const turnCount = session?.turns.length || 0;
+
+  useEffect(() => {
+    if (view === 'chat' && turnCount) lastTurn.current?.scrollIntoView({block: 'nearest'});
+  }, [turnCount, waiting, view]);
+
+  useEffect(() => {
+    if (showConnection) connectionInput.current?.focus();
+  }, [showConnection]);
 
   return <div className="stack assistant-page">
-    <form className="settings-card" onSubmit={event => {
+    <div className="workspace-toolbar">
+      <button className="connection-chip" type="button" aria-expanded={showConnection}
+        onClick={() => setShowConnection(open => !open)}>
+        <span className={connected ? 'connected' : ''} />
+        {connected ? '本机工作台已连接' : '连接本机工作台'}
+      </button>
+      <button className="workspace-legacy" type="button" onClick={onOpenLegacy}>旧版资料管理与工具</button>
+    </div>
+    {showConnection && <form className="settings-card connection-panel" onSubmit={event => {
       event.preventDefault();
       void run(async () => {
         const value = draft.trim();
@@ -143,103 +169,150 @@ export default function PythonWorkspace({renderSheetTask}: {renderSheetTask: She
         });
         if (!response.ok) throw Error(response.status === 401 ? 'unauthorized' : 'workbench_unavailable');
         if (isTauriApp()) await invoke('save_workbench_token', {token: value});
-        browserToken = value; setToken(value); setDraft('');
+        browserToken = value; setToken(value); setDraft(''); setShowConnection(false);
+        if (value === token) await refresh();
       });
     }}>
-      <h2>Python 知识工作台</h2>
-      <label>本机访问令牌<input type="password" autoComplete="off" value={draft} onChange={event => setDraft(event.target.value)} /></label>
+      <h2>工作台连接</h2>
+      <label>本机访问令牌<input ref={connectionInput} type="password" autoComplete="off" value={draft}
+        onChange={event => setDraft(event.target.value)} /></label>
       <div className="assistant-actions">
-        <button className="button" disabled={busy || !draft.trim()}>连接</button>
+        <button className="button primary" disabled={busy || !draft.trim()}>连接</button>
         {token && <button type="button" className="button" disabled={busy} onClick={() => void run(() => refresh())}>刷新主机</button>}
         {token && <button type="button" className="button" disabled={busy} onClick={() => void run(async () => {
           if (isTauriApp()) await invoke('delete_workbench_token');
           browserToken = ''; setToken(''); setPresets(undefined); setModels([]); setSources([]); setSelected([]);
-          setSession(undefined); setReference(undefined); setReport(undefined); setCloud(false); setResearch(false);
-          setAbilities([]); setShowQQ(false); setShowBusiness(false); setBusiness(undefined); setWebQuery('');
+          setSession(undefined); setReference(undefined); setReport(undefined); setCloud(false);
+          setAbilities([]); setBusiness(undefined); setWebQuery('');
         })}>忘记令牌</button>}
       </div>
-    </form>
+    </form>}
     {notice && <div className="callout" role="status">{notice}</div>}
-    {token && presets && <>
-      <div className="assistant-actions">
-        <button className="button" onClick={() => { setResearch(false); setShowQQ(false); setShowBusiness(false); }}>普通问答</button>
-        <button className="button" onClick={() => { setResearch(true); setShowQQ(false); setShowBusiness(false); }}>Deeper Research</button>
-        {qqEnabled && <button className="button" onClick={() => { setShowQQ(true); setShowBusiness(false); }}>QQ 能力收件箱</button>}
-        {business?.enabled && <button className="button" onClick={() => setShowBusiness(true)}>待办与填表</button>}
+
+    {view === 'chat' ? <section className="chat-panel" aria-label="AI 聊天对话">
+      <div className="chat-feed">
+        {!turnCount && <div className="chat-welcome">
+          <div className="chat-emblem" aria-hidden="true"><Sparkles size={32} strokeWidth={1.7} /></div>
+          <span className="chat-eyebrow">课桌助手</span>
+          <h2>今天想聊些什么？</h2>
+          <p>用你的知识库提问、整理思路，沿着引用查阅原文。</p>
+          <div className="chat-prompts" aria-label="试试这些问题">
+            {prompts.map(prompt => <button key={prompt} type="button" onClick={() => {
+              setQuestion(prompt); questionInput.current?.focus();
+            }}><MessageCircle size={15} aria-hidden="true" />{prompt}</button>)}
+          </div>
+        </div>}
+        {turnCount > 0 && <div className="chat-transcript" role="log" aria-label="对话记录">
+          {session?.turns.map(turn => <article className="chat-turn" key={turn.id}>
+            <div className="chat-user-message"><span className="chat-message-label">你</span>
+              <p className="assistant-text">{turn.question}</p></div>
+            <div className="chat-reply">
+              <span className="chat-reply-icon"><Sparkles size={17} aria-hidden="true" /></span>
+              <div className="chat-reply-body">
+                <span className="chat-message-label">课桌助手</span>
+                <p className="assistant-text">{turn.result ? turn.result.answer || labels[turn.result.status] || turn.result.status : '正在检索或生成…'}</p>
+                {turn.result?.abilityError && <p>{labels[turn.result.abilityError] || turn.result.abilityError}</p>}
+                {turn.result?.evidence.map(item => item.url ? <a className="button assistant-source" key={item.id}
+                  href={item.url} target="_blank" rel="noopener noreferrer">{item.title} · {item.provider}</a>
+                  : <button type="button" className="button assistant-source" key={item.id} onClick={() =>
+                    void run(async () => setReference(await request<Evidence>('/evidence/' + encodeURIComponent(item.id) + '?revision=' + encodeURIComponent(item.revision))))}>
+                    {item.title} · {item.locator}
+                  </button>)}
+              </div>
+            </div>
+          </article>)}
+        </div>}
+        {reference && <aside className="chat-reference" aria-label="引用原文">
+          <strong>{reference.title} · {reference.locator}</strong>
+          <button type="button" className="icon-button" aria-label="收起引用" onClick={() => setReference(undefined)}><X size={16} /></button>
+          <p className="assistant-text">{reference.quote}</p>
+        </aside>}
+        <div ref={lastTurn} />
       </div>
-      {showBusiness && business?.enabled ? <BusinessWorkspace request={request} renderTask={renderSheetTask} execute={business.execute} />
-        : showQQ && qqEnabled ? <QQInbox request={request} /> : research ? <Research request={request} models={models} sources={sources} presets={presets}
+      <form className="chat-composer" onSubmit={event => {
+        event.preventDefault();
+        if (!question.trim() || busy || waiting || (cloud && !model)) return;
+        if (!connected) { setShowConnection(true); return; }
+        void run(async () => {
+          const target = session || await request<Session>('/sessions', {});
+          setSession(target);
+          await request('/sessions/' + target.id + '/turns', {
+            question, clientRequestId: crypto.randomUUID(), useModel: cloud, modelId: model, sourceIds: selected,
+            webQuery: searchEnabled ? webQuery.trim() || undefined : undefined
+          });
+          setSession(await request<Session>('/sessions/' + target.id));
+          setQuestion(''); setWebQuery('');
+        });
+      }}>
+        <label className="chat-question"><span className="chat-sr-only">问题</span>
+          <textarea ref={questionInput} value={question} maxLength={2048} rows={2} placeholder="输入你的问题…"
+            onChange={event => setQuestion(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                event.preventDefault(); event.currentTarget.form?.requestSubmit();
+              }
+            }} />
+        </label>
+        <div className="chat-composer-actions">
+          <span className="chat-mode"><BookOpen size={14} aria-hidden="true" />{cloud ? '模型整理' : '本机知识库'}</span>
+          {connected && <details className="chat-options">
+            <summary><SlidersHorizontal size={15} aria-hidden="true" />问答选项{selected.length > 0 && ' · ' + selected.length}</summary>
+            <div className="chat-options-panel">
+              <label className="assistant-checkbox"><input type="checkbox" checked={cloud} disabled={!models.length}
+                onChange={event => setCloud(event.target.checked)} />使用模型整理已授权资料</label>
+              {cloud && <label>模型<select value={model} onChange={event => setModel(event.target.value)}>
+                {models.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+              </select></label>}
+              {searchEnabled && <label><span><Globe2 size={14} aria-hidden="true" /> 本次公网搜索词（可选）</span>
+                <input maxLength={200} value={webQuery} onChange={event => setWebQuery(event.target.value)} />
+                <small>提交会将此处的搜索词发送给搜索服务。</small>
+              </label>}
+              <details><summary>指定资料（已选 {selected.length} 份）</summary>
+                <div className="assistant-entries">{sources.map(source => <label className="assistant-checkbox" key={source.id}>
+                  <input type="checkbox" checked={selected.includes(source.id)}
+                    disabled={selected.length >= 16 && !selected.includes(source.id)}
+                    onChange={event => setSelected(ids => event.target.checked ? [...ids, source.id] : ids.filter(id => id !== source.id))} />
+                  {source.name}
+                </label>)}</div>
+              </details>
+              {session && <button type="button" className="button" disabled={busy} onClick={() => void run(async () => {
+                await request('/sessions/' + session.id + '/close', {}); setSession(undefined); setReference(undefined);
+              })}>关闭对话</button>}
+            </div>
+          </details>}
+          <div className="chat-send">
+            {waiting ? <button type="button" className="button" disabled={busy}
+              onClick={() => session && void run(async () => setSession(await request<Session>('/sessions/' + session.id + '/cancel', {})))}>取消生成</button>
+              : <button className="button primary chat-send-button" aria-label="发送消息" disabled={busy || !question.trim() || (cloud && !model)}>
+                <ArrowUp size={16} aria-hidden="true" /><span>发送</span>
+              </button>}
+          </div>
+        </div>
+        <p className="chat-keyboard-hint">Enter 发送 · Shift + Enter 换行</p>
+      </form>
+    </section> : view === 'business' && business?.enabled
+      ? <BusinessWorkspace request={request} renderTask={renderSheetTask} execute={business.execute} />
+      : view === 'qq' && qqEnabled ? <QQInbox request={request} />
+      : view === 'research' && presets ? <Research request={request} models={models} sources={sources} presets={presets}
         pendingPreview={!!report} save={async (id, name, includeProcess) =>
           setReport(await request<Report>('/research/' + id + '/save-preview', {name, includeProcess}))}
-        recheckCompleted /> : <section className="settings-card">
-        <h2>普通问答</h2>
-        <form onSubmit={event => {
-          event.preventDefault();
-          void run(async () => {
-            const target = session || await request<Session>('/sessions', {});
-            setSession(target);
-            await request('/sessions/' + target.id + '/turns', {
-              question, clientRequestId: crypto.randomUUID(), useModel: cloud, modelId: model, sourceIds: selected,
-              webQuery: searchEnabled ? webQuery.trim() || undefined : undefined
-            });
-            setSession(await request<Session>('/sessions/' + target.id));
-            setQuestion(''); setWebQuery('');
-          });
-        }}>
-          <label>问题<textarea value={question} maxLength={2048} onChange={event => setQuestion(event.target.value)} /></label>
-          {searchEnabled && <label>本次公网搜索词（可选）
-            <input maxLength={200} value={webQuery} onChange={event => setWebQuery(event.target.value)} />
-            <small>提交会将此处的搜索词发送给搜索服务。</small>
-          </label>}
-          <label className="assistant-checkbox"><input type="checkbox" checked={cloud} disabled={!models.length}
-            onChange={event => setCloud(event.target.checked)} />使用模型整理已授权资料</label>
-          {cloud && <label>模型<select value={model} onChange={event => setModel(event.target.value)}>
-            {models.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
-          </select></label>}
-          <details><summary>指定资料（已选 {selected.length} 份）</summary>
-            <div className="assistant-entries">{sources.map(source => <label className="assistant-checkbox" key={source.id}>
-              <input type="checkbox" checked={selected.includes(source.id)}
-                disabled={selected.length >= 16 && !selected.includes(source.id)}
-                onChange={event => setSelected(ids => event.target.checked ? [...ids, source.id] : ids.filter(id => id !== source.id))} />
-              {source.name}
-            </label>)}</div>
-          </details>
-          <div className="assistant-actions">
-            <button className="button primary" disabled={busy || !question.trim() || session?.state === 'running' || (cloud && !model)}>提问</button>
-            {session?.state === 'running' && <button type="button" className="button" disabled={busy}
-              onClick={() => void run(async () => setSession(await request<Session>('/sessions/' + session.id + '/cancel', {})))}>取消生成</button>}
-            {session && <button type="button" className="button" disabled={busy} onClick={() => void run(async () => {
-              await request('/sessions/' + session.id + '/close', {}); setSession(undefined); setReference(undefined);
-            })}>关闭对话</button>}
-          </div>
-        </form>
-        {session?.turns.map(turn => <article key={turn.id} className="assistant-turn">
-          <strong>{turn.question}</strong>
-          <p className="assistant-text">{turn.result ? turn.result.answer || labels[turn.result.status] || turn.result.status : '正在检索或生成…'}</p>
-          {turn.result?.abilityError && <p>{labels[turn.result.abilityError] || turn.result.abilityError}</p>}
-          {turn.result?.evidence.map(item => item.url ? <a className="button assistant-source" key={item.id}
-            href={item.url} target="_blank" rel="noopener noreferrer">{item.title} · {item.provider}</a>
-            : <button className="button assistant-source" key={item.id} onClick={() =>
-            void run(async () => setReference(await request<Evidence>('/evidence/' + encodeURIComponent(item.id) + '?revision=' + encodeURIComponent(item.revision))))}>
-            {item.title} · {item.locator}
-          </button>)}
-        </article>)}
-        {reference && <div className="assistant-turn"><strong>{reference.title} · {reference.locator}</strong>
-          <p className="assistant-text">{reference.quote}</p><button className="button" onClick={() => setReference(undefined)}>收起引用</button></div>}
+        recheckCompleted />
+      : <section className="settings-card">
+        <h2>{!connected ? '请先连接本机工作台' : '当前主机未启用此能力'}</h2>
+        {!connected && <button className="button" type="button" onClick={() => setShowConnection(true)}>设置连接</button>}
       </section>}
-      {report && <section className="settings-card">
-        <h3>保存预览 · {report.name}</h3><p className="assistant-text">{report.text}</p>
-        <div className="assistant-actions">{(['approve', 'reject'] as const).map(decision => <button key={decision}
-          className={decision === 'approve' ? 'button primary' : 'button'} disabled={busy}
-          onClick={() => void run(async () => {
-            await request('/report-previews/' + report.id + '/decision', {decision, digest: report.digest});
-            setReport(undefined);
-            if (decision === 'approve') {
-              const docs = await request<{items: Source[]}>('/documents');
-              setSources(docs.items); setNotice('已保存到知识库。');
-            }
-          })}>{decision === 'approve' ? '批准保存' : '拒绝'}</button>)}</div>
-      </section>}
-    </>}
+    {report && <section className="settings-card">
+      <h3>保存预览 · {report.name}</h3><p className="assistant-text">{report.text}</p>
+      <div className="assistant-actions">{(['approve', 'reject'] as const).map(decision => <button key={decision}
+        className={decision === 'approve' ? 'button primary' : 'button'} disabled={busy}
+        onClick={() => void run(async () => {
+          await request('/report-previews/' + report.id + '/decision', {decision, digest: report.digest});
+          setReport(undefined);
+          if (decision === 'approve') {
+            const docs = await request<{items: Source[]}>('/documents');
+            setSources(docs.items); setNotice('已保存到知识库。');
+          }
+        })}>{decision === 'approve' ? '批准保存' : '拒绝'}</button>)}</div>
+    </section>}
   </div>;
 }

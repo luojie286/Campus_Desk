@@ -326,7 +326,10 @@ test('M1 desktop: import approval and local citation from the built workbench',
     };
     await page.route('**/api/v1/assistant/**', relay);
     await page.goto('http://127.0.0.1:' + server.address().port);
-    await page.getByRole('button', { name: '个人知识库', exact: true }).click();
+    await page.getByRole('heading', { name: '今天想聊些什么？', exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: 'AI 聊天', exact: true }).getAttribute('aria-current'), 'page');
+    assert.equal(await page.getByRole('textbox', { name: '问题', exact: true }).isVisible(), true);
+    assert.equal(await page.getByLabel('本机访问令牌').count(), 0);
     await page.getByRole('button', { name: '旧版资料管理与工具', exact: true }).click();
     await page.getByLabel('独立知识库令牌').fill(token);
     await page.getByRole('button', { name: '连接', exact: true }).click();
@@ -383,7 +386,7 @@ test('M1 desktop: import approval and local citation from the built workbench',
     page = await browser.newPage();
     await page.route('**/api/v1/assistant/**', relay);
     await page.goto('http://127.0.0.1:' + server.address().port);
-    await page.getByRole('button', { name: '个人知识库', exact: true }).click();
+    await page.getByRole('button', { name: 'AI 聊天', exact: true }).click();
     await page.getByRole('button', { name: '旧版资料管理与工具', exact: true }).click();
     await page.getByLabel('独立知识库令牌').fill(token);
     await page.getByRole('button', { name: '连接', exact: true }).click();

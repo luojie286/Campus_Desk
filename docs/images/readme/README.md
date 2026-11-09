@@ -1,8 +1,9 @@
 # README 配图与截图来源
 
 - `hero.svg`、`hero-en.svg`：本项目原创中英文 SVG 横幅，仅作为处理流程示意，不是界面截图。
-- `desktop-inbox.png`、`desktop-approval.png`：实际 React 前端在 Edge 无头浏览器中的截图。Playwright 拦截全部 API，注入合成消息与计划；屏蔽远程资源，禁止修改请求，没有业务后台和真实写表。
-- `desktop-knowledge.png`、`desktop-research.png`：实际 React 界面的普通问答与 Deeper Research 截图。使用合成回答、引用、预算和评审记录，沿用相同的只读 API 拦截。
+- `desktop-chat.png`：实际 React 构建的粉色聊天首页，展示首次打开时的提示与输入框。
+- `desktop-knowledge.png`、`desktop-research.png`：新版 Python 工作台的聊天引用与深度研究，展示合成回答、资料、预算及评审记录。
+- `desktop-inbox.png`、`desktop-approval.png`：桌面业务记录与新版填写计划，使用合成消息和修改预览。
 - `android-*.png`：实际 Android Compose 界面，由 Robolectric 原生图形模式渲染。使用 debug 离线演示数据，不是手机实拍或模拟器截图。
 
 图片中的消息、资料、群名和链接均为合成示例，不能作为真实 QQ 接入或平台执行验收证据。
@@ -17,16 +18,19 @@
 
 该命令重新运行 Compose 界面测试，生成 `app/build/reports/mobile-preview/` 下的图片。`--offline` 适用于依赖已缓存的环境，可在首次准备依赖时去掉；`--rerun-tasks` 强制重新生成，避免复用旧图片。它只使用本机测试运行库，不操作已配对的手机。
 
-然后回到仓库根目录运行：
+然后回到仓库根目录构建桌面前端并截图：
 
 ```powershell
+npm run desktop:build
 node tools/capture-readme.cjs
 ```
 
-需要已安装的根目录/桌面 npm 依赖与 Edge。脚本启动临时本机 Vite 预览，截图后关闭浏览器与预览进程，并复制上一步的 Android 预览。不会加载 `.private/`、运行业务 worker、调用真实 API 或发送模型请求。横幅 SVG 独立维护。
+需要已安装的根目录和桌面 npm 依赖以及 Edge。脚本在临时 Vite 预览中打开构建产物，通过 Playwright 提供合成 API 响应并阻止远程资源和修改请求。结束后关闭浏览器与预览进程，并复制上一步的 Android 图片。横幅 SVG 独立维护。
 
-只更新桌面知识库和研究截图时，在仓库根目录运行以下命令。`--assistant-only` 只生成这两张截图，跳过 Android 预览和旧桌面截图。
+只更新桌面图片时，可跳过 Android 测试，在构建后运行：
 
 ~~~powershell
-node tools/capture-readme.cjs --assistant-only
+node tools/capture-readme.cjs --desktop-only
 ~~~
+
+`--assistant-only` 可只更新聊天首页、引用和研究三张截图。

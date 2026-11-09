@@ -9,6 +9,8 @@ const {chromium} = require('playwright');
 const root = path.resolve(__dirname, '..');
 const output = path.join(root, 'docs/images/readme');
 const assistantOnly = process.argv.includes('--assistant-only');
+const desktopOnly = assistantOnly || process.argv.includes('--desktop-only');
+const pythonOrigin = 'http://127.0.0.1:9089';
 const stamp = '2026-11-05T00:40:00Z';
 const target = 'https://docs.qq.com/sheet/DEMO_REGISTRATION';
 
@@ -59,11 +61,13 @@ const assistantFixtures = {
     medium: {tokens: 100000, calls: 27, rounds: 3, activeMs: 900000},
     high: {tokens: 200000, calls: 54, rounds: 6, activeMs: 1800000}
   }},
-  '/roots': {items: []},
-  '/knowledge': {items: evidence.map(item => ({id: item.documentId, name: item.title, rootId: 'demo-root', status: 'active', kind: 'file'}))},
-  '/grants': {items: evidence.map(item => ({target: item.documentId}))},
-  '/todos': {items: [{id: 401, title: '整理课程笔记 · 演示', admitted: 1}]},
-  '/profile': {items: []},
+  '/documents': {items: evidence.map(item => ({id: item.documentId, name: item.title, status: 'active'}))},
+  '/abilities': {items: []},
+  '/business': {enabled: true, execute: true},
+  '/todos': {items: todos},
+  '/legacy-runs': {items: []},
+  '/sheet-tasks': {items: tasks},
+  '/sheet-tasks/201': tasks[0],
   '/sessions': {items: [{id: 'demo-chat', state: 'idle'}]},
   '/sessions/demo-chat': {id: 'demo-chat', state: 'idle', seq: 2, turns: [
     {id: 'demo-turn', question: '第一次读论文时，应该记录哪些证据？',
@@ -92,11 +96,12 @@ const assistantFixtures = {
 for (const item of evidence) assistantFixtures['/evidence/' + item.id] = item;
 
 function fixture(url) {
-  const endpoint = url.pathname.replace(/^\/api/, '');
-  if (endpoint.startsWith('/v1/assistant/')) {
-    const route = endpoint.slice('/v1/assistant'.length);
-    if (Object.hasOwn(assistantFixtures, route)) return {epoch: 'demo', data: assistantFixtures[route]};
+  if (url.origin === pythonOrigin) {
+    const route = url.pathname.replace(/^\/api\/v1\/(interaction|knowledge)(?=\/)/, '');
+    if (Object.hasOwn(assistantFixtures, route)) return assistantFixtures[route];
+    throw Error('Unexpected Python screenshot API endpoint: ' + url.pathname);
   }
+  const endpoint = url.pathname.replace(/^\/api/, '');
   const lists = {'/v1/sources': sources, '/v1/messages': messages, '/v1/suggestions': suggestions,
     '/v1/todos': todos, '/v1/tasks': tasks, '/v1/listen-sources': [], '/v1/notifications': []};
   if (endpoint === '/health') return {running: true, sourceConfigured: true};
@@ -119,7 +124,7 @@ async function main() {
   fs.mkdirSync(output, {recursive: true});
   const port = await freePort();
   const base = `http://127.0.0.1:${port}`;
-  const vite = spawn(process.execPath, [path.join(root, 'desktop/node_modules/vite/bin/vite.js'),
+  const vite = spawn(process.execPath, [path.join(root, 'desktop/node_modules/vite/bin/vite.js'), 'preview',
     '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
   {cwd: path.join(root, 'desktop'), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']});
   let browser;
@@ -139,13 +144,17 @@ async function main() {
     await context.route('**/*', async route => {
       const request = route.request();
       const url = new URL(request.url());
-      if (url.origin !== base) return route.abort();
+      const python = url.origin === pythonOrigin && url.pathname.startsWith('/api/v1/');
+      if (url.origin !== base && !python) return route.abort();
       if (!url.pathname.startsWith('/api')) return route.continue();
+      const headers = python ? {'Access-Control-Allow-Origin': base, 'Access-Control-Allow-Methods': 'GET',
+        'Access-Control-Allow-Headers': 'Authorization, Content-Type'} : {};
+      if (python && request.method() === 'OPTIONS') return route.fulfill({status: 204, headers});
       if (request.method() !== 'GET') {
         violations.push('modifying_request');
         return route.fulfill({status: 405, json: {error: 'readme_read_only'}});
       }
-      try {await route.fulfill({json: fixture(url)});}
+      try {await route.fulfill({json: fixture(url), headers});}
       catch (error) {violations.push(error.message); await route.fulfill({status: 404, json: {error: 'fixture_missing'}});}
     });
     await context.addInitScript(() => {
@@ -154,29 +163,28 @@ async function main() {
     });
     const page = await context.newPage();
     page.on('pageerror', error => violations.push(error.message));
+    await page.clock.setFixedTime(new Date(stamp));
     await page.goto(base, {waitUntil: 'networkidle'});
+    await page.setViewportSize({width: 1440, height: 940});
+    await page.getByRole('heading', {name: '今天想聊些什么？', exact: true}).waitFor();
+    await page.screenshot({path: path.join(output, 'desktop-chat.png'), animations: 'disabled'});
     if (!assistantOnly) {
+      await page.setViewportSize({width: 1440, height: 1040});
+      await page.getByRole('button', {name: '消息中心', exact: false}).click();
       await page.getByRole('heading', {name: '周五前提交实验报告', exact: true}).waitFor();
       await page.screenshot({path: path.join(output, 'desktop-inbox.png'), animations: 'disabled'});
-      await page.getByRole('button', {name: '查看审批', exact: true}).click();
-      await page.getByRole('heading', {name: '拟填内容', exact: true}).waitFor();
-      await page.screenshot({path: path.join(output, 'desktop-approval.png'), animations: 'disabled'});
-      await page.getByRole('button', {name: '关闭详情', exact: true}).click();
     }
-    await page.getByRole('button', {name: '个人知识库', exact: true}).click();
-    await page.getByRole('button', {name: '旧版资料管理与工具', exact: true}).click();
-    await page.getByLabel('独立知识库令牌').fill('synthetic-readme-assistant');
+    await page.getByRole('button', {name: 'AI 聊天', exact: true}).click();
+    await page.getByRole('button', {name: '连接本机工作台', exact: true}).click();
+    await page.getByLabel('本机访问令牌').fill('synthetic-readme-assistant');
     await page.getByRole('button', {name: '连接', exact: true}).click();
-    await page.getByLabel('使用模型整理已授权资料', {exact: true}).check();
     const reference = evidence[0];
     await page.getByRole('button', {name: reference.title + ' · ' + reference.locator, exact: true}).click();
     await page.getByText(reference.quote, {exact: true}).waitFor();
-    await page.setViewportSize({width: 1440, height: 940});
-    await page.getByRole('heading', {name: '普通问答', exact: true}).evaluate(element =>
-      element.closest('section').scrollIntoView({block: 'start'}));
+    await page.setViewportSize({width: 1440, height: 870});
     await page.screenshot({path: path.join(output, 'desktop-knowledge.png'), animations: 'disabled'});
 
-    await page.getByRole('button', {name: 'Deeper Research', exact: true}).click();
+    await page.getByRole('button', {name: '深度研究', exact: true}).click();
     await page.getByRole('heading', {name: '当前较优报告', exact: true}).waitFor();
     await page.getByRole('button', {name: '查看研究过程', exact: true}).click();
     await page.getByText('只记页码会遗漏结论的适用条件。', {exact: true}).waitFor();
@@ -184,9 +192,21 @@ async function main() {
     await page.getByRole('heading', {name: '研究进度', exact: true}).evaluate(element =>
       element.closest('section').scrollIntoView({block: 'start'}));
     await page.screenshot({path: path.join(output, 'desktop-research.png'), animations: 'disabled'});
+    if (!assistantOnly) {
+      await page.setViewportSize({width: 1440, height: 900});
+      await page.getByRole('button', {name: '待办与填表', exact: true}).click();
+      await page.getByRole('button', {name: /任务 #201/}).click();
+      await page.getByRole('heading', {name: '拟填内容', exact: true}).waitFor();
+      await page.locator('.main-scroll').evaluate(element => {element.scrollTop = element.scrollHeight;});
+      const approval = await page.getByRole('button', {name: '批准并写入', exact: true}).boundingBox();
+      if (!approval || approval.y + approval.height > page.viewportSize().height) {
+        throw Error('Approval control is outside the screenshot viewport');
+      }
+      await page.screenshot({path: path.join(output, 'desktop-approval.png'), animations: 'disabled'});
+    }
     if (violations.length) throw Error(violations.join('; '));
-    if (assistantOnly) {
-      console.log('Saved knowledge and research screenshots to docs/images/readme/');
+    if (desktopOnly) {
+      console.log('Saved desktop screenshots to docs/images/readme/');
       return;
     }
     // Android previews are rendered by the real Compose UI in ScreenTest.
