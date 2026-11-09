@@ -1,5 +1,6 @@
 """Local HTTP entry point for the Python knowledge migration."""
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 from secrets import compare_digest
 import sqlite3
@@ -12,6 +13,10 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, StringConstraints
 
 from .knowledge import Evidence, FileKnowledge
+from .abilities import Abilities
+from .abilities.qq import QQ
+from .ability_api import ability_routes, napcat_routes
+from .inbox import QQInbox
 from .interaction import workbench_routes
 from .llm import AnswerModel, GroundedAnswers
 from .models import ChatTransport, Model
@@ -26,12 +31,26 @@ class SearchRequest(BaseModel):
 
 
 def create_app(root: Path, token: str, *, model: AnswerModel | None = None,
-               models: dict[str, Model] | None = None, transport: ChatTransport | None = None) -> FastAPI:
+               models: dict[str, Model] | None = None, transport: ChatTransport | None = None,
+               abilities: Abilities | None = None) -> FastAPI:
     if len(token) < 32:
         raise ValueError("knowledge_token_required")
     bearer = HTTPBearer(auto_error=False)
     knowledge = FileKnowledge(root)
-    app = FastAPI(title="CampusDesk Knowledge")
+    runtime = abilities or Abilities()
+
+    @asynccontextmanager
+    async def lifespan(_app):
+        qq = runtime.continuous.get("qq.listen")
+        if isinstance(qq, QQ):
+            qq.consumer = QQInbox(qq)
+        await runtime.start()
+        try:
+            yield
+        finally:
+            await runtime.stop()
+
+    app = FastAPI(title="CampusDesk Knowledge", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173",
                                       "http://tauri.localhost", "https://tauri.localhost", "tauri://localhost"],
@@ -69,6 +88,9 @@ def create_app(root: Path, token: str, *, model: AnswerModel | None = None,
         return item
 
     compatibility_answers = GroundedAnswers(knowledge, model) if model is not None else None
-    app.include_router(workbench_routes(root, knowledge, models or {}, transport or ChatTransport(), compatibility_answers),
+    app.include_router(workbench_routes(root, knowledge, models or {}, transport or ChatTransport(), compatibility_answers,
+                                       abilities=runtime),
                        dependencies=[Depends(authorize)])
+    app.include_router(ability_routes(runtime), dependencies=[Depends(authorize)])
+    app.include_router(napcat_routes(runtime))
     return app

@@ -154,7 +154,11 @@ python -m venv .venv
 
 前两条创建隔离 Python 环境并安装依赖，第三条启动回环工作台。首次连接时，在桌面「个人知识库」粘贴 `-CopyToken` 复制的令牌。模型读取主机的 DeepSeek 配置和环境变量，先用 `python -m campusdesk knowledge-cloud <资料ID> allow` 或旧版资料管理审批对应资料的云端处理权限。
 
-QQ、手工填表和旧版资料管理从「旧版资料管理与工具」进入，按[合并启动说明](docs/setup.md#桌面知识库)独立启动原服务。
+手工填表和旧版资料管理从「旧版资料管理与工具」进入，按[合并启动说明](docs/setup.md#桌面知识库)独立启动原服务。
+
+Python 工作台也可按需启用能力。启动脚本加 `-SearchProvider crossref` 启用论文元数据搜索。通用网页搜索用 `-SearchProvider brave`，并在主机环境中设置 `BRAVE_SEARCH_API_KEY`。普通问答只发送用户填写的公网搜索词。
+
+加 `-QQAbility` 启用 Python QQ 收件箱。复用已绑定的 QQ 账号和监听来源，将 NapCat 的 HTTP 回调指向 `http://127.0.0.1:9089/api/v1/abilities/qq/callback`。回调默认用本机 OneBot 配置的令牌，也可设独立的 `CAMPUSDESK_QQ_CALLBACK_TOKEN`。测试或切换时为目标来源选择一个回调处理入口。历史拉取需要独立的历史读取授权，加 `-QQHistorySuggestions` 才会从拉取的历史生成候选。候选确认和消息保存在独立能力库中。
 
 ### 配置真实业务后启动
 

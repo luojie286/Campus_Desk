@@ -2,17 +2,21 @@
 
 import asyncio
 from dataclasses import asdict, dataclass, field
+from hashlib import sha256
 import json
 from uuid import uuid4
 
 
 from .knowledge import Evidence, FileKnowledge
+from .abilities import Abilities
+from .abilities.search import SearchInput
 from .models import ChatTransport, Model, ModelError, estimate
 from .workbench_errors import WorkbenchError
 
 
 def evidence_payload(items: list[Evidence]) -> list[dict]:
-    return [{"id": item.id, "locator": item.locator, "quote": item.quote} for item in items]
+    return [{"id": item.id, "locator": item.locator, "quote": item.quote,
+             **({"provider": item.provider, "url": item.url} if item.url else {})} for item in items]
 
 
 def model_messages(instructions: str, payload: dict) -> list[dict]:
@@ -42,6 +46,11 @@ class Grounding:
         def check():
             current = []
             for item in items:
+                # Public excerpts belong to this turn and are never queried
+                # through the personal knowledge base.
+                if item.url and item.provider:
+                    current.append(item)
+                    continue
                 fresh = self.knowledge.evidence(item.id)
                 if fresh and fresh.revision == item.revision and fresh.quote == item.quote and (not cloud or fresh.cloud_allowed):
                     current.append(fresh)
@@ -57,6 +66,7 @@ class Turn:
     result: dict | None = None
     evidence: list[Evidence] = field(default_factory=list)
     sent: list[Evidence] = field(default_factory=list)
+    ability_error: str | None = None
 
 
 @dataclass
@@ -68,10 +78,12 @@ class Session:
 
 
 class Conversations:
-    def __init__(self, grounding: Grounding, models: dict[str, Model], transport: ChatTransport):
+    def __init__(self, grounding: Grounding, models: dict[str, Model], transport: ChatTransport,
+                 abilities: Abilities | None = None):
         self.grounding = grounding
         self.models = models
         self.transport = transport
+        self.abilities = abilities or Abilities()
         self.sessions: dict[str, Session] = {}
         self.one_off = 0
 
@@ -116,6 +128,8 @@ class Conversations:
                     result = {**result, "evidence": [asdict(item) for item in evidence]}
                     if turn.evidence and not evidence:
                         result["status"] = "source_changed"
+                if turn.ability_error:
+                    result = {**result, "abilityError": turn.ability_error}
             turns.append({"id": turn.id, "question": turn.question, "result": result})
         return {"id": session.id, "seq": seq, "state": state, "turns": turns}
 
@@ -151,6 +165,16 @@ class Conversations:
             earlier = list(session.turns.values())[:-1]
             if not matches and earlier:
                 matches = await self.grounding.search(earlier[-1].question + " " + turn.question, data["sourceIds"])
+            if query := data.get("webQuery"):
+                try:
+                    hits = await self.abilities.invoke("web.search", SearchInput(query))
+                    for hit in hits:
+                        identifier = "web-" + sha256(hit.url.encode()).hexdigest()[:32]
+                        revision = sha256((hit.title + "\n" + hit.excerpt).encode()).hexdigest()
+                        matches.append(Evidence(identifier, identifier, revision, hit.title, hit.provider,
+                                                hit.excerpt or hit.title, True, hit.url, hit.provider))
+                except WorkbenchError as error:
+                    turn.ability_error = error.code
             if not matches:
                 turn.result = {"status": "no_evidence"}
                 return
@@ -162,7 +186,11 @@ class Conversations:
             if model is None or not model.available:
                 turn.evidence = matches
                 raise ModelError("model_unavailable")
-            sources = (await self.grounding.current(matches, cloud=True))[:8]
+            authorized = await self.grounding.current(matches, cloud=True)
+            public = [item for item in authorized if item.url]
+            local = [item for item in authorized if not item.url]
+            chosen_local = local[:8 - min(4, len(public))]
+            sources = chosen_local + public[:8 - len(chosen_local)]
             if not sources:
                 turn.evidence = matches
                 raise ModelError("cloud_grant_required")

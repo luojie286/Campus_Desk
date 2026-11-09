@@ -162,7 +162,11 @@ python -m venv .venv
 
 The first two commands create an isolated Python environment and install dependencies. The last command starts the loopback workbench and copies its token. Open the desktop knowledge base and paste the token to connect. Model calls use the host's DeepSeek configuration and environment. Use `python -m campusdesk knowledge-cloud <document-id> allow` or the legacy document manager to approve cloud processing for specific material.
 
-Open the legacy tools tab for QQ, manual spreadsheet preparation, and legacy document management. Start the legacy service separately using the [combined startup guide (Chinese)](docs/setup.md#桌面知识库).
+Open the legacy tools tab for manual spreadsheet preparation and legacy document management. Start the legacy service separately using the [combined startup guide (Chinese)](docs/setup.md#桌面知识库).
+
+To enable an ability on the Python workbench, pass `-SearchProvider crossref` for scholarly metadata search, or `-SearchProvider brave` with `BRAVE_SEARCH_API_KEY` set for web search. Only the explicit public query field is sent to the search service.
+
+Pass `-QQAbility` to enable the Python QQ inbox. Reuse an authorized account binding and source list, and point NapCat's HTTP callback at `http://127.0.0.1:9089/api/v1/abilities/qq/callback`. The callback uses the local OneBot token by default or a separate `CAMPUSDESK_QQ_CALLBACK_TOKEN`. Select one callback consumer for a source during testing or cutover. History requires separate read permission, and only generates suggestions with `-QQHistorySuggestions`. The Python ability stores its messages and candidate decisions separately.
 
 ### Configure real use before starting
 

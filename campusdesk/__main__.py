@@ -55,8 +55,11 @@ def parse_args():
     serve.add_argument("--qq", action="store_true")
     serve.add_argument("--sheets", action="store_true")
     serve.add_argument("--briefings", action="store_true")
-    knowledge = commands.add_parser("serve-knowledge", help="启动 Python 知识库只读 API")
+    knowledge = commands.add_parser("serve-knowledge", help="启动 Python 知识工作台")
     knowledge.add_argument("--port", type=int, default=9089)
+    knowledge.add_argument("--search-provider", choices=("crossref", "brave"))
+    knowledge.add_argument("--qq-ability", action="store_true")
+    knowledge.add_argument("--qq-history-suggestions", action="store_true")
     commands.add_parser("init-knowledge", help="初始化独立 Python 知识工作区")
     import_knowledge = commands.add_parser("import-knowledge", help="预览或批准导入一个本机文件")
     import_knowledge.add_argument("source", type=Path)
@@ -122,13 +125,16 @@ def main() -> None:
             import uvicorn
             from .knowledge_api import create_app
             from .models import load_models
+            from .abilities.setup import load_abilities
         except ImportError as error:
             raise WorkspaceError("knowledge_dependencies_missing") from error
         try:
             models = load_models(root)
         except (KeyError, TypeError, AttributeError, OSError, ValueError) as error:
             raise WorkspaceError("invalid_model_config") from error
-        uvicorn.run(create_app(root, token, models=models), host="127.0.0.1", port=args.port, access_log=False)
+        abilities = load_abilities(root, args.search_provider, args.qq_ability, args.qq_history_suggestions)
+        uvicorn.run(create_app(root, token, models=models, abilities=abilities),
+                    host="127.0.0.1", port=args.port, access_log=False)
         return
     else:
         if root != PROJECT:

@@ -43,6 +43,8 @@ class Evidence:
     locator: str
     quote: str
     cloud_allowed: bool
+    url: str | None = None
+    provider: str | None = None
 
 
 def terms(text: str):

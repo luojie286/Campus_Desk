@@ -1,4 +1,9 @@
-param([switch]$CopyToken)
+param(
+    [switch]$CopyToken,
+    [ValidateSet('crossref','brave')][string]$SearchProvider,
+    [switch]$QQAbility,
+    [switch]$QQHistorySuggestions
+)
 
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $PSScriptRoot
@@ -34,7 +39,11 @@ try {
         Set-Clipboard -Value $env:CAMPUSDESK_KNOWLEDGE_TOKEN
         Write-Output 'Python workbench token copied to clipboard.'
     }
-    & $python -m campusdesk --root $project serve-knowledge
+    $options = @()
+    if ($SearchProvider) { $options += @('--search-provider', $SearchProvider) }
+    if ($QQAbility) { $options += '--qq-ability' }
+    if ($QQHistorySuggestions) { $options += '--qq-history-suggestions' }
+    & $python -m campusdesk --root $project serve-knowledge @options
     exit $LASTEXITCODE
 } finally {
     Pop-Location

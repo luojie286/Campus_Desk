@@ -2,13 +2,15 @@ import {useCallback, useEffect, useState} from 'react';
 import {invoke} from '@tauri-apps/api/core';
 import {isTauriApp} from '../secure';
 import Research from './Research';
+import QQInbox from './QQInbox';
 import type {EffortPresets} from './Research';
+import type {Ability} from './QQInbox';
 
 type Model = {id: string; label: string};
 type Source = {id: string; name: string; status: string};
-type Evidence = {id: string; title: string; locator: string; quote: string; revision: string};
+type Evidence = {id: string; title: string; locator: string; quote: string; revision: string; url?: string; provider?: string};
 type Session = {id: string; state: string; seq: number; turns: {
-  id: string; question: string; result?: {status: string; answer?: string; evidence: Evidence[]};
+  id: string; question: string; result?: {status: string; answer?: string; evidence: Evidence[]; abilityError?: string};
 }[]};
 type Report = {id: string; name: string; digest: string; text: string};
 
@@ -20,7 +22,9 @@ const labels: Record<string, string> = {
   source_changed: '资料或授权已变化，请重新提问。', cancelled: '已取消。',
   unauthorized: '请检查知识库访问令牌。', session_expired: '主机会话已释放，请新建会话。',
   report_name_exists: '报告文件名已存在，请换一个名称。',
-  preview_changed: '报告或授权已变化，请重新预览。'
+  preview_changed: '报告或授权已变化，请重新预览。',
+  ability_disabled: '未启用公网搜索。', ability_timeout: '公网搜索超时。',
+  ability_provider_failed: '搜索服务暂时不可用。', ability_rate_limited: '搜索服务暂时限流。'
 };
 let browserToken = '';
 
@@ -36,6 +40,9 @@ export default function PythonWorkspace() {
   const [question, setQuestion] = useState('');
   const [cloud, setCloud] = useState(false);
   const [research, setResearch] = useState(false);
+  const [abilities, setAbilities] = useState<Ability[]>([]);
+  const [showQQ, setShowQQ] = useState(false);
+  const [webQuery, setWebQuery] = useState('');
   const [reference, setReference] = useState<Evidence>();
   const [report, setReport] = useState<Report>();
   const [notice, setNotice] = useState('');
@@ -71,15 +78,17 @@ export default function PythonWorkspace() {
   }, []);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
-    const [cap, docs, sessions] = await Promise.all([
+    const [cap, docs, sessions, available] = await Promise.all([
       request<{models: Model[]; effortPresets: EffortPresets}>('/capabilities', undefined, signal),
       request<{items: Source[]}>('/documents', undefined, signal),
-      request<{items: {id: string}[]}>('/sessions', undefined, signal)
+      request<{items: {id: string}[]}>('/sessions', undefined, signal),
+      request<{items: Ability[]}>('/abilities', undefined, signal)
     ]);
     const last = sessions.items.at(-1);
     const current = last ? await request<Session>('/sessions/' + last.id, undefined, signal) : undefined;
     if (signal?.aborted) return;
     setModels(cap.models); setPresets(cap.effortPresets); setSources(docs.items);
+    setAbilities(available.items);
     setModel(old => cap.models.some(item => item.id === old) ? old : cap.models[0]?.id || '');
     setSession(current);
   }, [request]);
@@ -115,6 +124,9 @@ export default function PythonWorkspace() {
     return () => { controller.abort(); window.clearInterval(timer); };
   }, [token, request, session?.id, session?.state]);
 
+  const searchEnabled = abilities.some(item => item.id === 'web.search' && item.state === 'available');
+  const qqEnabled = abilities.some(item => item.id === 'qq.listen' && ['running', 'degraded'].includes(item.state));
+
   return <div className="stack assistant-page">
     <form className="settings-card" onSubmit={event => {
       event.preventDefault();
@@ -137,16 +149,18 @@ export default function PythonWorkspace() {
           if (isTauriApp()) await invoke('delete_workbench_token');
           browserToken = ''; setToken(''); setPresets(undefined); setModels([]); setSources([]); setSelected([]);
           setSession(undefined); setReference(undefined); setReport(undefined); setCloud(false); setResearch(false);
+          setAbilities([]); setShowQQ(false); setWebQuery('');
         })}>忘记令牌</button>}
       </div>
     </form>
     {notice && <div className="callout" role="status">{notice}</div>}
     {token && presets && <>
       <div className="assistant-actions">
-        <button className="button" onClick={() => setResearch(false)}>普通问答</button>
-        <button className="button" onClick={() => setResearch(true)}>Deeper Research</button>
+        <button className="button" onClick={() => { setResearch(false); setShowQQ(false); }}>普通问答</button>
+        <button className="button" onClick={() => { setResearch(true); setShowQQ(false); }}>Deeper Research</button>
+        {qqEnabled && <button className="button" onClick={() => setShowQQ(true)}>QQ 能力收件箱</button>}
       </div>
-      {research ? <Research request={request} models={models} sources={sources} presets={presets}
+      {showQQ && qqEnabled ? <QQInbox request={request} /> : research ? <Research request={request} models={models} sources={sources} presets={presets}
         pendingPreview={!!report} save={async (id, name, includeProcess) =>
           setReport(await request<Report>('/research/' + id + '/save-preview', {name, includeProcess}))}
         recheckCompleted /> : <section className="settings-card">
@@ -157,13 +171,18 @@ export default function PythonWorkspace() {
             const target = session || await request<Session>('/sessions', {});
             setSession(target);
             await request('/sessions/' + target.id + '/turns', {
-              question, clientRequestId: crypto.randomUUID(), useModel: cloud, modelId: model, sourceIds: selected
+              question, clientRequestId: crypto.randomUUID(), useModel: cloud, modelId: model, sourceIds: selected,
+              webQuery: searchEnabled ? webQuery.trim() || undefined : undefined
             });
             setSession(await request<Session>('/sessions/' + target.id));
-            setQuestion('');
+            setQuestion(''); setWebQuery('');
           });
         }}>
           <label>问题<textarea value={question} maxLength={2048} onChange={event => setQuestion(event.target.value)} /></label>
+          {searchEnabled && <label>本次公网搜索词（可选）
+            <input maxLength={200} value={webQuery} onChange={event => setWebQuery(event.target.value)} />
+            <small>提交会将此处的搜索词发送给搜索服务。</small>
+          </label>}
           <label className="assistant-checkbox"><input type="checkbox" checked={cloud} disabled={!models.length}
             onChange={event => setCloud(event.target.checked)} />使用模型整理已授权资料</label>
           {cloud && <label>模型<select value={model} onChange={event => setModel(event.target.value)}>
@@ -189,7 +208,10 @@ export default function PythonWorkspace() {
         {session?.turns.map(turn => <article key={turn.id} className="assistant-turn">
           <strong>{turn.question}</strong>
           <p className="assistant-text">{turn.result ? turn.result.answer || labels[turn.result.status] || turn.result.status : '正在检索或生成…'}</p>
-          {turn.result?.evidence.map(item => <button className="button assistant-source" key={item.id} onClick={() =>
+          {turn.result?.abilityError && <p>{labels[turn.result.abilityError] || turn.result.abilityError}</p>}
+          {turn.result?.evidence.map(item => item.url ? <a className="button assistant-source" key={item.id}
+            href={item.url} target="_blank" rel="noopener noreferrer">{item.title} · {item.provider}</a>
+            : <button className="button assistant-source" key={item.id} onClick={() =>
             void run(async () => setReference(await request<Evidence>('/evidence/' + encodeURIComponent(item.id) + '?revision=' + encodeURIComponent(item.revision))))}>
             {item.title} · {item.locator}
           </button>)}

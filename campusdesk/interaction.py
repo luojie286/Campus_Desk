@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, StringConstraints
 
 from .conversations import Conversations, Grounding
+from .abilities import Abilities
 from .knowledge import FileKnowledge, relative_parts
 from .knowledge.importing import publish_note
 from .llm import GroundedAnswers
@@ -22,6 +23,7 @@ from .workspace import WorkspaceError
 RequestId = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{1,96}$")]
 Question = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2048)]
 DocumentId = Annotated[str, StringConstraints(min_length=1, max_length=128)]
+PublicQuery = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 
 
 class AskRequest(BaseModel):
@@ -29,6 +31,7 @@ class AskRequest(BaseModel):
     document_ids: list[DocumentId] = Field(default_factory=list, max_length=16)
     use_model: bool = False
     model_id: str | None = Field(default=None, max_length=64)
+    web_query: PublicQuery | None = None
 
 
 class TurnRequest(BaseModel):
@@ -37,6 +40,7 @@ class TurnRequest(BaseModel):
     modelId: str = Field(default="", max_length=64)
     useModel: bool = False
     sourceIds: list[DocumentId] = Field(default_factory=list, max_length=16)
+    webQuery: PublicQuery | None = None
 
 
 class ResearchRequest(BaseModel):
@@ -78,22 +82,22 @@ class Report:
 
 
 def workbench_routes(root: Path, knowledge: FileKnowledge, models: dict[str, Model], transport: ChatTransport,
-                     compatibility_answers: GroundedAnswers | None = None) -> APIRouter:
+                     compatibility_answers: GroundedAnswers | None = None, *, abilities: Abilities | None = None) -> APIRouter:
     router = APIRouter(prefix="/api/v1/interaction")
     grounding = Grounding(knowledge)
-    conversations = Conversations(grounding, models, transport)
+    conversations = Conversations(grounding, models, transport, abilities)
     research = Research(grounding, models, transport)
     reports: dict[str, Report] = {}
 
     @router.post("/answers")
     async def ask(body: AskRequest):
-        if compatibility_answers is not None:
+        if compatibility_answers is not None and not body.web_query:
             return await asyncio.to_thread(compatibility_answers.ask, body.question, tuple(body.document_ids), body.use_model)
         model_id = body.model_id if body.model_id is not None else next(
             (item.id for item in models.values() if item.available), "",
         )
         result = await conversations.single({"question": body.question, "sourceIds": body.document_ids,
-                                              "useModel": body.use_model, "modelId": model_id})
+                                              "useModel": body.use_model, "modelId": model_id, "webQuery": body.web_query})
         return {"answer": "", **result}
 
     @router.get("/capabilities")
