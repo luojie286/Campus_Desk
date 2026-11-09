@@ -33,6 +33,25 @@ function readback(plan, grid){
     (!plan.identityReadback||identityDigest(plan,grid)===plan.identityReadback)&&changesMatch(plan,grid);
 }
 
+function matchKnownColumns(payload){
+  const mappings=[];
+  const used=new Set();
+  for(const [index,header] of payload.headers.entries()){
+    if(!header)continue;
+    const matches=payload.fields.filter(field=>field.synonyms.includes(header));
+    if(matches.length!==1||used.has(matches[0].key))return null;
+    const field=matches[0].key;
+    used.add(field);
+    mappings.push({column:index+1,field});
+  }
+  return mappings.length?{mappings,confidence:1,notes:'known_headers'}:null;
+}
+
+async function analyzeForPlan({payload,config}){
+  // A complete, unambiguous match of known headers requires no model call.
+  return matchKnownColumns(payload)||analyzeColumns({payload,config});
+}
+
 function verifyGrant(input){
   if(!existsSync('.private/python-business.owner')||
      loadConfig('.private/config.json',{allowUnconfigured:true}).execute!==true)throw Error('execute_disabled');
@@ -64,7 +83,7 @@ function verifyGrant(input){
   }finally{db.close();}
 }
 
-async function run(input, config, createSheet=()=>new TencentSheet(config), analyze=analyzeColumns, verify=()=>{}){
+async function run(input, config, createSheet=()=>new TencentSheet(config), analyze=analyzeForPlan, verify=()=>{}){
   let attempted=false, sheet;
   try{
     if(!['prepare','execute','reconcile','probe'].includes(input.action))throw Error('plan_not_current');

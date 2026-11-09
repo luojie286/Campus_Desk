@@ -3,6 +3,21 @@ const assert=require('node:assert/strict');
 const {chromium}=require('playwright');
 const {run}=require('../tools/python-sheet-adapter.cjs');
 
+test('Python sheet bridge: known headers can prepare an empty row locally',async()=>{
+  const input={action:'prepare',target:'https://docs.qq.com/sheet/synthetic',
+    profile:{name:'合成姓名',student_id:'001',major:'合成专业'}};
+  const createSheet=()=>({
+    async open(){},
+    async readUsedRange(){return [['姓名','学号','专业']];},
+    async close(){}
+  });
+  const prepared=await run(input,{llm:{base_url:'http://127.0.0.1:1'}},createSheet);
+  assert.equal(prepared.ok,true);
+  assert.equal(prepared.plan.notes,'known_headers');
+  assert.deepEqual(prepared.plan.changes.map(item=>[item.row,item.col,item.field]),
+    [[2,1,'name'],[2,2,'student_id'],[2,3,'major']]);
+});
+
 test('Python sheet bridge: preserves safe read errors and suppresses unknown details',async()=>{
   const input={action:'probe',target:'https://docs.qq.com/sheet/synthetic'};
   const createSheet=message=>()=>({
