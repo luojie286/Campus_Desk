@@ -9,6 +9,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Use the DPAPI cmdlets for this engine even when launched from PowerShell 7.
+Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1')
 $projectDirectory = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $projectDirectory
 $runtimeExe = Join-Path $projectDirectory '.private/runtime/node-v24.22.2/node.exe'

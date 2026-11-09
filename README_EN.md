@@ -162,7 +162,7 @@ python -m venv .venv
 
 The first two commands create an isolated Python environment and install dependencies. The last command starts the loopback workbench and copies its token. Open the desktop knowledge base and paste the token to connect. Model calls use the host's DeepSeek configuration and environment. Use `python -m campusdesk knowledge-cloud <document-id> allow` or the legacy document manager to approve cloud processing for specific material.
 
-Open the legacy tools tab for manual spreadsheet preparation and legacy document management. Start the legacy service separately using the [combined startup guide (Chinese)](docs/setup.md#桌面知识库).
+After cutover, `serve` starts the Python workbench by default. Use `python -m campusdesk serve --legacy-assistant --copy-token` for the legacy document manager. This mode starts no QQ, spreadsheet, or briefing workers.
 
 To enable an ability on the Python workbench, pass `-SearchProvider crossref` for scholarly metadata search, or `-SearchProvider brave` with `BRAVE_SEARCH_API_KEY` set for web search. Only the explicit public query field is sent to the search service.
 
@@ -170,7 +170,7 @@ Pass `-QQAbility` to enable the Python QQ inbox. Reuse an authorized account bin
 
 To transfer existing todo and spreadsheet work, stop the legacy and Python hosts. Run `.\.venv\Scripts\python.exe -m campusdesk business-cutover` to review counts and the migration digest. Repeat with `--approve <digest>` to back up SQLite and transfer ownership. Historical records remain available. Interrupted writes go to readback recovery, and the legacy business worker refuses to start after the transfer.
 
-Start with `.\tools\start-python-workbench.ps1 -QQAbility -Sheets -CopyToken` for read-only planning. After signing in to the project QQ account, `node tools/configure-qq.cjs --python-callback` backs up and switches the project callback. Writing requires `-ExecuteSheets`, an enabled execution setting, and approval of the current plan.
+Start with `python -m campusdesk serve --qq --sheets --copy-token` for read-only planning. After signing in to the project QQ account, `node tools/configure-qq.cjs --python-callback` backs up and switches the project callback. Writing requires `--execute-sheets`, an enabled execution setting, and approval of the current plan.
 
 ### Configure real use before starting
 

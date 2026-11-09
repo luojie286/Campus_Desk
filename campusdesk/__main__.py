@@ -15,6 +15,41 @@ from .workspace import WorkspaceError, apply_migration, bind_qq, migration_plan,
 PROJECT = Path(__file__).resolve().parents[1]
 
 
+def serve_workspace(root: Path, args: argparse.Namespace) -> int:
+    from .cutover import owned
+
+    if root != PROJECT:
+        raise WorkspaceError("use_workspace_launcher_in_project_root")
+    if args.execute_sheets and not args.sheets:
+        raise WorkspaceError("sheets_not_enabled")
+    python_options = args.execute_sheets or args.search_provider or args.qq_history_suggestions
+    if args.legacy_assistant and (args.qq or args.sheets or args.briefings or python_options):
+        raise WorkspaceError("legacy_assistant_knowledge_only")
+    if owned(root) and not args.legacy_assistant:
+        if args.briefings:
+            raise WorkspaceError("briefings_unavailable_after_cutover")
+        script = "start-python-workbench.ps1"
+        flags = [name for enabled, name in (
+            (args.copy_token, "-CopyToken"), (args.qq, "-QQAbility"),
+            (args.sheets, "-Sheets"), (args.execute_sheets, "-ExecuteSheets"),
+            (args.qq_history_suggestions, "-QQHistorySuggestions"),
+        ) if enabled]
+        if args.search_provider:
+            flags.extend(("-SearchProvider", args.search_provider))
+    else:
+        if python_options:
+            raise WorkspaceError("business_cutover_required")
+        script = "start-assistant.ps1"
+        flags = [name for enabled, name in (
+            (args.copy_token, "-CopyDesktopToken"), (args.qq, "-WithQQ"),
+            (args.sheets, "-WithSheets"), (args.briefings, "-WithBriefings"),
+        ) if enabled]
+    return subprocess.call(
+        ["powershell.exe", "-NoProfile", "-File", str(PROJECT / "tools" / script), *flags],
+        cwd=root, env={**os.environ, "CAMPUS_DESK_PYTHON": sys.executable},
+    )
+
+
 def node_entry(root: Path, script: str, *arguments: str) -> None:
     executable = PROJECT / ".private" / "runtime" / "node-v24.22.2" / "node.exe"
     if not executable.is_file():
@@ -55,6 +90,10 @@ def parse_args():
     serve.add_argument("--qq", action="store_true")
     serve.add_argument("--sheets", action="store_true")
     serve.add_argument("--briefings", action="store_true")
+    serve.add_argument("--execute-sheets", action="store_true")
+    serve.add_argument("--search-provider", choices=("crossref", "brave"))
+    serve.add_argument("--qq-history-suggestions", action="store_true")
+    serve.add_argument("--legacy-assistant", action="store_true", help="仅启动旧版资料管理")
     knowledge = commands.add_parser("serve-knowledge", help="启动 Python 知识工作台")
     knowledge.add_argument("--port", type=int, default=9089)
     knowledge.add_argument("--search-provider", choices=("crossref", "brave"))
@@ -152,16 +191,7 @@ def main() -> None:
                     host="127.0.0.1", port=args.port, access_log=False)
         return
     else:
-        if root != PROJECT:
-            raise WorkspaceError("use_workspace_launcher_in_project_root")
-        flags = [name for flag, name in (
-            (args.copy_token, "-CopyDesktopToken"), (args.qq, "-WithQQ"),
-            (args.sheets, "-WithSheets"), (args.briefings, "-WithBriefings")
-        ) if flag]
-        status = subprocess.call(["powershell.exe", "-NoProfile", "-File",
-                                  str(PROJECT / "tools/start-assistant.ps1"), *flags], cwd=root,
-                                 env={**os.environ, "CAMPUS_DESK_PYTHON": sys.executable})
-        raise SystemExit(status)
+        raise SystemExit(serve_workspace(root, args))
     print(json.dumps(result, ensure_ascii=False))
 
 

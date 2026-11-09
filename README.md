@@ -154,7 +154,7 @@ python -m venv .venv
 
 前两条创建隔离 Python 环境并安装依赖，第三条启动回环工作台。首次连接时，在桌面「个人知识库」粘贴 `-CopyToken` 复制的令牌。模型读取主机的 DeepSeek 配置和环境变量，先用 `python -m campusdesk knowledge-cloud <资料ID> allow` 或旧版资料管理审批对应资料的云端处理权限。
 
-手工填表和旧版资料管理从「旧版资料管理与工具」进入，按[合并启动说明](docs/setup.md#桌面知识库)独立启动原服务。
+接管后，`serve` 默认启动 Python 工作台。旧版资料管理可单独用 `python -m campusdesk serve --legacy-assistant --copy-token` 启动，并在桌面进入「旧版资料管理与工具」。此模式不启用 QQ、填表或早报 worker。
 
 Python 工作台也可按需启用能力。启动脚本加 `-SearchProvider crossref` 启用论文元数据搜索。通用网页搜索用 `-SearchProvider brave`，并在主机环境中设置 `BRAVE_SEARCH_API_KEY`。普通问答只发送用户填写的公网搜索词。
 
@@ -162,7 +162,7 @@ Python 工作台也可按需启用能力。启动脚本加 `-SearchProvider cros
 
 已有待办与填表业务接管分两步。先停止旧业务和 Python 工作台，用 `.\.venv\Scripts\python.exe -m campusdesk business-cutover` 查看记录数量和摘要。核对后给同一命令加 `--approve <摘要>`，主机先备份 SQLite，再将业务执行权交给 Python。旧任务、审批和原型记录保留。已开始写入但未确认结果的任务只安排回读。Python 接管后，旧版业务 worker 无法启动。
 
-用 `.\tools\start-python-workbench.ps1 -QQAbility -Sheets -CopyToken` 启动，只读准备计划并在桌面打开「待办与填表」。项目 QQ 已登录时，可用 `node tools/configure-qq.cjs --python-callback` 备份并切换项目回调。真实填写需要启动时另加 `-ExecuteSheets`，配置中的执行开关开启，以及用户批准当前计划。
+用 `python -m campusdesk serve --qq --sheets --copy-token` 启动，只读准备计划并在桌面打开「待办与填表」。项目 QQ 已登录时，可用 `node tools/configure-qq.cjs --python-callback` 备份并切换项目回调。真实填写需要启动时另加 `--execute-sheets`，配置中的执行开关开启，以及用户批准当前计划。
 
 ### 配置真实业务后启动
 
