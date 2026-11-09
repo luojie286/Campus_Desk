@@ -20,6 +20,8 @@ from .inbox import QQInbox
 from .interaction import workbench_routes
 from .llm import AnswerModel, GroundedAnswers
 from .models import ChatTransport, Model
+from .sheet_api import routes as sheet_routes
+from .sheets import Sheets
 from .workbench_errors import WorkbenchError
 
 DocumentId = Annotated[str, StringConstraints(min_length=1, max_length=128)]
@@ -32,7 +34,7 @@ class SearchRequest(BaseModel):
 
 def create_app(root: Path, token: str, *, model: AnswerModel | None = None,
                models: dict[str, Model] | None = None, transport: ChatTransport | None = None,
-               abilities: Abilities | None = None) -> FastAPI:
+               abilities: Abilities | None = None, sheets: Sheets | None = None) -> FastAPI:
     if len(token) < 32:
         raise ValueError("knowledge_token_required")
     bearer = HTTPBearer(auto_error=False)
@@ -46,8 +48,13 @@ def create_app(root: Path, token: str, *, model: AnswerModel | None = None,
             qq.consumer = QQInbox(qq)
         await runtime.start()
         try:
+            if sheets:
+                sheets.qq = qq if isinstance(qq, QQ) else sheets.qq
+                await sheets.start()
             yield
         finally:
+            if sheets:
+                await sheets.stop()
             await runtime.stop()
 
     app = FastAPI(title="CampusDesk Knowledge", lifespan=lifespan)
@@ -92,5 +99,6 @@ def create_app(root: Path, token: str, *, model: AnswerModel | None = None,
                                        abilities=runtime),
                        dependencies=[Depends(authorize)])
     app.include_router(ability_routes(runtime), dependencies=[Depends(authorize)])
+    app.include_router(sheet_routes(sheets), dependencies=[Depends(authorize)])
     app.include_router(napcat_routes(runtime))
     return app

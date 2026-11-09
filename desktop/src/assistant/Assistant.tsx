@@ -83,7 +83,7 @@ export default function Assistant(props: AssistantProps) {
       }}>Python 知识工作台</button>
       <button className="button" type="button" disabled={showLegacy} onClick={() => setLegacy(true)}>旧版资料管理与工具</button>
     </div>
-    {showLegacy ? <LegacyAssistant {...props} /> : <PythonWorkspace />}
+    {showLegacy ? <LegacyAssistant {...props} /> : <PythonWorkspace renderSheetTask={props.renderSheetTask} />}
   </div>;
 }
 

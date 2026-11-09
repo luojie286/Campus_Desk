@@ -12,6 +12,7 @@ import httpx
 from . import AbilityEvent, AbilitySpec, EventConsumer
 from .http import request_json
 from ..messages import select_source
+from ..cutover import runtime_lock
 from ..workbench_errors import WorkbenchError
 from ..workspace import default_workspace, table_exists
 
@@ -40,6 +41,7 @@ class QQ:
     spec = AbilitySpec("qq.listen", 1, "continuous")
 
     def __init__(self, root: Path, settings: QQSettings, transport: httpx.AsyncBaseTransport | None = None):
+        self.root = root
         self.settings = settings
         self.knowledge = root / ".private" / "poc.sqlite"
         self.database = root / ".private" / "abilities.sqlite"
@@ -87,9 +89,16 @@ class QQ:
 
     async def start(self):
         if self.worker is None:
-            await asyncio.to_thread(self.prepare)
-            self.stopping = False
-            self.worker = asyncio.create_task(self.consume())
+            lock = runtime_lock(self.root, "python-qq.lock")
+            lock.__enter__()
+            try:
+                await asyncio.to_thread(self.prepare)
+                self.stopping = False
+                self.worker = asyncio.create_task(self.consume())
+            except BaseException:
+                lock.__exit__(None, None, None)
+                raise
+            self.lock = lock
 
     async def stop(self):
         if self.worker:
@@ -99,6 +108,7 @@ class QQ:
             self.wake.set()
             await asyncio.gather(self.worker, return_exceptions=True)
             self.worker = None
+            self.lock.__exit__(None, None, None)
 
     def status(self):
         if not self.worker:

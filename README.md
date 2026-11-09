@@ -160,6 +160,10 @@ Python 工作台也可按需启用能力。启动脚本加 `-SearchProvider cros
 
 加 `-QQAbility` 启用 Python QQ 收件箱。复用已绑定的 QQ 账号和监听来源，将 NapCat 的 HTTP 回调指向 `http://127.0.0.1:9089/api/v1/abilities/qq/callback`。回调默认用本机 OneBot 配置的令牌，也可设独立的 `CAMPUSDESK_QQ_CALLBACK_TOKEN`。测试或切换时为目标来源选择一个回调处理入口。历史拉取需要独立的历史读取授权，加 `-QQHistorySuggestions` 才会从拉取的历史生成候选。候选确认和消息保存在独立能力库中。
 
+已有待办与填表业务接管分两步。先停止旧业务和 Python 工作台，用 `.\.venv\Scripts\python.exe -m campusdesk business-cutover` 查看记录数量和摘要。核对后给同一命令加 `--approve <摘要>`，主机先备份 SQLite，再将业务执行权交给 Python。旧任务、审批和原型记录保留。已开始写入但未确认结果的任务只安排回读。Python 接管后，旧版业务 worker 无法启动。
+
+用 `.\tools\start-python-workbench.ps1 -QQAbility -Sheets -CopyToken` 启动，只读准备计划并在桌面打开「待办与填表」。项目 QQ 已登录时，可用 `node tools/configure-qq.cjs --python-callback` 备份并切换项目回调。真实填写需要启动时另加 `-ExecuteSheets`，配置中的执行开关开启，以及用户批准当前计划。
+
 ### 配置真实业务后启动
 
 首次使用需完成独立账号、资料和会话配置，参阅 [运行与连接说明](docs/setup.md)。

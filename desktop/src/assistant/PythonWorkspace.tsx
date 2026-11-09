@@ -3,6 +3,8 @@ import {invoke} from '@tauri-apps/api/core';
 import {isTauriApp} from '../secure';
 import Research from './Research';
 import QQInbox from './QQInbox';
+import BusinessWorkspace from './BusinessWorkspace';
+import type {SheetTaskRenderer} from './SheetWorkspace';
 import type {EffortPresets} from './Research';
 import type {Ability} from './QQInbox';
 
@@ -28,7 +30,7 @@ const labels: Record<string, string> = {
 };
 let browserToken = '';
 
-export default function PythonWorkspace() {
+export default function PythonWorkspace({renderSheetTask}: {renderSheetTask: SheetTaskRenderer}) {
   const [token, setToken] = useState(browserToken);
   const [draft, setDraft] = useState('');
   const [models, setModels] = useState<Model[]>([]);
@@ -42,6 +44,8 @@ export default function PythonWorkspace() {
   const [research, setResearch] = useState(false);
   const [abilities, setAbilities] = useState<Ability[]>([]);
   const [showQQ, setShowQQ] = useState(false);
+  const [showBusiness, setShowBusiness] = useState(false);
+  const [business, setBusiness] = useState<{enabled: boolean; execute: boolean}>();
   const [webQuery, setWebQuery] = useState('');
   const [reference, setReference] = useState<Evidence>();
   const [report, setReport] = useState<Report>();
@@ -78,17 +82,19 @@ export default function PythonWorkspace() {
   }, []);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
-    const [cap, docs, sessions, available] = await Promise.all([
+    const [cap, docs, sessions, available, businessState] = await Promise.all([
       request<{models: Model[]; effortPresets: EffortPresets}>('/capabilities', undefined, signal),
       request<{items: Source[]}>('/documents', undefined, signal),
       request<{items: {id: string}[]}>('/sessions', undefined, signal),
-      request<{items: Ability[]}>('/abilities', undefined, signal)
+      request<{items: Ability[]}>('/abilities', undefined, signal),
+      request<{enabled: boolean; execute: boolean}>('/business', undefined, signal)
     ]);
     const last = sessions.items.at(-1);
     const current = last ? await request<Session>('/sessions/' + last.id, undefined, signal) : undefined;
     if (signal?.aborted) return;
     setModels(cap.models); setPresets(cap.effortPresets); setSources(docs.items);
     setAbilities(available.items);
+    setBusiness(businessState);
     setModel(old => cap.models.some(item => item.id === old) ? old : cap.models[0]?.id || '');
     setSession(current);
   }, [request]);
@@ -149,18 +155,20 @@ export default function PythonWorkspace() {
           if (isTauriApp()) await invoke('delete_workbench_token');
           browserToken = ''; setToken(''); setPresets(undefined); setModels([]); setSources([]); setSelected([]);
           setSession(undefined); setReference(undefined); setReport(undefined); setCloud(false); setResearch(false);
-          setAbilities([]); setShowQQ(false); setWebQuery('');
+          setAbilities([]); setShowQQ(false); setShowBusiness(false); setBusiness(undefined); setWebQuery('');
         })}>忘记令牌</button>}
       </div>
     </form>
     {notice && <div className="callout" role="status">{notice}</div>}
     {token && presets && <>
       <div className="assistant-actions">
-        <button className="button" onClick={() => { setResearch(false); setShowQQ(false); }}>普通问答</button>
-        <button className="button" onClick={() => { setResearch(true); setShowQQ(false); }}>Deeper Research</button>
-        {qqEnabled && <button className="button" onClick={() => setShowQQ(true)}>QQ 能力收件箱</button>}
+        <button className="button" onClick={() => { setResearch(false); setShowQQ(false); setShowBusiness(false); }}>普通问答</button>
+        <button className="button" onClick={() => { setResearch(true); setShowQQ(false); setShowBusiness(false); }}>Deeper Research</button>
+        {qqEnabled && <button className="button" onClick={() => { setShowQQ(true); setShowBusiness(false); }}>QQ 能力收件箱</button>}
+        {business?.enabled && <button className="button" onClick={() => setShowBusiness(true)}>待办与填表</button>}
       </div>
-      {showQQ && qqEnabled ? <QQInbox request={request} /> : research ? <Research request={request} models={models} sources={sources} presets={presets}
+      {showBusiness && business?.enabled ? <BusinessWorkspace request={request} renderTask={renderSheetTask} execute={business.execute} />
+        : showQQ && qqEnabled ? <QQInbox request={request} /> : research ? <Research request={request} models={models} sources={sources} presets={presets}
         pendingPreview={!!report} save={async (id, name, includeProcess) =>
           setReport(await request<Report>('/research/' + id + '/save-preview', {name, includeProcess}))}
         recheckCompleted /> : <section className="settings-card">

@@ -2,10 +2,15 @@ param(
     [switch]$CopyToken,
     [ValidateSet('crossref','brave')][string]$SearchProvider,
     [switch]$QQAbility,
-    [switch]$QQHistorySuggestions
+    [switch]$QQHistorySuggestions,
+    [switch]$Sheets,
+    [switch]$ExecuteSheets
 )
 
 $ErrorActionPreference = 'Stop'
+# A child Windows PowerShell can inherit a module path from PowerShell 7.
+# Load the DPAPI cmdlets from the current engine's own installation.
+Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Security/Microsoft.PowerShell.Security.psd1')
 $project = Split-Path -Parent $PSScriptRoot
 $python = Join-Path $project '.venv/Scripts/python.exe'
 $private = Join-Path $project '.private'
@@ -43,6 +48,8 @@ try {
     if ($SearchProvider) { $options += @('--search-provider', $SearchProvider) }
     if ($QQAbility) { $options += '--qq-ability' }
     if ($QQHistorySuggestions) { $options += '--qq-history-suggestions' }
+    if ($Sheets) { $options += '--sheets' }
+    if ($ExecuteSheets) { $options += '--execute-sheets' }
     & $python -m campusdesk --root $project serve-knowledge @options
     exit $LASTEXITCODE
 } finally {

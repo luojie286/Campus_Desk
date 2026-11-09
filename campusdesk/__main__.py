@@ -60,6 +60,11 @@ def parse_args():
     knowledge.add_argument("--search-provider", choices=("crossref", "brave"))
     knowledge.add_argument("--qq-ability", action="store_true")
     knowledge.add_argument("--qq-history-suggestions", action="store_true")
+    knowledge.add_argument("--sheets", action="store_true")
+    knowledge.add_argument("--execute-sheets", action="store_true")
+    cutover = commands.add_parser("business-cutover", help="预览或按摘要备份并接管旧业务")
+    cutover.add_argument("--approve", metavar="DIGEST")
+    cutover.add_argument("--workbench-port", type=int, default=9089)
     commands.add_parser("init-knowledge", help="初始化独立 Python 知识工作区")
     import_knowledge = commands.add_parser("import-knowledge", help="预览或批准导入一个本机文件")
     import_knowledge.add_argument("source", type=Path)
@@ -115,6 +120,9 @@ def main() -> None:
     elif args.command == "knowledge-cloud":
         from .knowledge.permissions import set_cloud_permission
         result = set_cloud_permission(root, args.target, args.decision == "allow")
+    elif args.command == "business-cutover":
+        from .cutover import apply, preview
+        result = apply(root, args.approve, workbench_port=args.workbench_port) if args.approve else preview(root)
     elif args.command == "serve-knowledge":
         if not 1 <= args.port <= 65535:
             raise WorkspaceError("knowledge_port_invalid")
@@ -126,6 +134,8 @@ def main() -> None:
             from .knowledge_api import create_app
             from .models import load_models
             from .abilities.setup import load_abilities
+            from .cutover import owned
+            from .sheets import Sheets
         except ImportError as error:
             raise WorkspaceError("knowledge_dependencies_missing") from error
         try:
@@ -133,7 +143,12 @@ def main() -> None:
         except (KeyError, TypeError, AttributeError, OSError, ValueError) as error:
             raise WorkspaceError("invalid_model_config") from error
         abilities = load_abilities(root, args.search_provider, args.qq_ability, args.qq_history_suggestions)
-        uvicorn.run(create_app(root, token, models=models, abilities=abilities),
+        if args.execute_sheets and not args.sheets:
+            raise WorkspaceError("sheets_not_enabled")
+        if args.sheets and not owned(root):
+            raise WorkspaceError("business_cutover_required")
+        sheets = Sheets(root, execute=args.execute_sheets) if args.sheets else None
+        uvicorn.run(create_app(root, token, models=models, abilities=abilities, sheets=sheets),
                     host="127.0.0.1", port=args.port, access_log=False)
         return
     else:

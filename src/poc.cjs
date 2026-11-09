@@ -36,6 +36,12 @@ const {createSheetService}=require('./sheets/service.cjs');
 const {resolveWorkspace,accountHasHistory}=require('./workspace/context.cjs');
 const profiles=require('./documents/profile.cjs');
 fs.mkdirSync('.private',{recursive:true});
+const command=process.argv[2]||'status';
+const knowledgeOnly=command==='serve-assistant' && !process.argv.slice(3).some(flag=>['--qq','--sheets','--briefings'].includes(flag));
+const legacyReadOnly=['status','profile-list','backup'].includes(command);
+if(!legacyReadOnly){
+  require('./business-owner.cjs').claimLegacy({allowPythonOwner:command==='login'||knowledgeOnly});
+}
 const configPath='.private/config.json';
 if(!fs.existsSync(configPath)){
   fs.writeFileSync(configPath,JSON.stringify({port:9087,token:crypto.randomBytes(32).toString('hex'),source:{type:'private',id:''},allowed_document:'',max_rows:6,execute:false},null,2));
@@ -55,7 +61,6 @@ const sourcesRepo=createSourceRepository(store.db);
 const notificationsRepo=createNotificationRepository(store.db);
 const briefingsRepo=createBriefingRepository(store.db);
 const v2Handler=createV2Handler({messages:messagesRepo,suggestions:suggestionsRepo,tasks:tasksRepo,jobs:jobsRepo,files:filesRepo,sources:sourcesRepo,notifications:notificationsRepo,briefings:briefingsRepo,contacts,config});
-const command=process.argv[2]||'status';
 let busy=false;
 let briefingBusy=false;
 async function drainBriefing(){

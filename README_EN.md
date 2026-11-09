@@ -168,6 +168,10 @@ To enable an ability on the Python workbench, pass `-SearchProvider crossref` fo
 
 Pass `-QQAbility` to enable the Python QQ inbox. Reuse an authorized account binding and source list, and point NapCat's HTTP callback at `http://127.0.0.1:9089/api/v1/abilities/qq/callback`. The callback uses the local OneBot token by default or a separate `CAMPUSDESK_QQ_CALLBACK_TOKEN`. Select one callback consumer for a source during testing or cutover. History requires separate read permission, and only generates suggestions with `-QQHistorySuggestions`. The Python ability stores its messages and candidate decisions separately.
 
+To transfer existing todo and spreadsheet work, stop the legacy and Python hosts. Run `.\.venv\Scripts\python.exe -m campusdesk business-cutover` to review counts and the migration digest. Repeat with `--approve <digest>` to back up SQLite and transfer ownership. Historical records remain available. Interrupted writes go to readback recovery, and the legacy business worker refuses to start after the transfer.
+
+Start with `.\tools\start-python-workbench.ps1 -QQAbility -Sheets -CopyToken` for read-only planning. After signing in to the project QQ account, `node tools/configure-qq.cjs --python-callback` backs up and switches the project callback. Writing requires `-ExecuteSheets`, an enabled execution setting, and approval of the current plan.
+
 ### Configure real use before starting
 
 First configure your accounts, profile, and dedicated sessions. See the [runtime and connection guide (Chinese)](docs/setup.md).

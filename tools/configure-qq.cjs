@@ -15,6 +15,7 @@ async function onebot(action, body) {
   return result.data;
 }
 async function main(){
+  const pythonCallback=process.argv[2]==='--python-callback';
   // 群聊来源：按群名和成员昵称/群名片唯一定位，不把昵称当作运行时过滤依据。
   if(process.argv[2]==='resolve-group'){
     const groupName=process.argv[3];
@@ -59,6 +60,15 @@ async function main(){
     console.log('Source resolved to one stable friend ID and bound to the logged-in account; saved privately.');
     return;
   }
+  const pythonOwner=fs.existsSync('.private/python-business.owner');
+  if(pythonCallback!==pythonOwner)throw Error(pythonOwner?'python_callback_required':'business_cutover_required');
+  const callbackUrl=pythonCallback?'http://127.0.0.1:9089/api/v1/abilities/qq/callback':'http://127.0.0.1:9087/onebot';
+  if(pythonCallback){
+    // An unauthenticated probe does not create an event. It distinguishes
+    // the enabled Python callback from a wrong port or a disabled listener.
+    const probe=await fetch(callbackUrl,{method:'POST',body:'{}',signal:AbortSignal.timeout(5000),redirect:'error'});
+    if(probe.status!==401)throw Error('python_callback_unavailable');
+  }
   // 使用本项目新安装实例的管理令牌，通过正常 API 热加载，不退出已登录账号。
   const web=JSON.parse(fs.readFileSync(root+'/webui.json','utf8').replace(/^\uFEFF/,''));
   const hash=require('node:crypto').createHash('sha256').update(web.token+'.napcat').digest('hex');
@@ -72,12 +82,24 @@ async function main(){
   if(!fs.existsSync(file))throw Error('active_account_config_missing');
   const settings=JSON.parse(fs.readFileSync(file));
   settings.network??={};
-  settings.network.httpServers=[{name:'lab-local-api',enable:true,host:'127.0.0.1',port:9088,enableCors:false,enableWebsocket:false,messagePostFormat:'array',token:app.token,debug:false}];
-  settings.network.httpClients=[{name:'lab-poc-events',enable:true,url:'http://127.0.0.1:9087/onebot',messagePostFormat:'array',reportSelfMessage:false,token:app.token,debug:false}];
+  if(pythonCallback){
+    const clients=settings.network.httpClients||[];
+    if(clients.some(item=>item.enable&&item.name!=='lab-poc-events'&&
+      ['http://127.0.0.1:9087/onebot',callbackUrl].includes(item.url)))throw Error('duplicate_project_callback');
+    settings.network.httpClients=clients.filter(item=>item.name!=='lab-poc-events');
+    fs.copyFileSync(file,file+'.'+require('node:crypto').randomUUID()+'.bak',fs.constants.COPYFILE_EXCL);
+  }else{
+    settings.network.httpServers=[{name:'lab-local-api',enable:true,host:'127.0.0.1',port:9088,enableCors:false,enableWebsocket:false,messagePostFormat:'array',token:app.token,debug:false}];
+    settings.network.httpClients=[];
+  }
+  settings.network.httpClients.push({name:'lab-poc-events',enable:true,url:callbackUrl,messagePostFormat:'array',
+    reportSelfMessage:false,token:pythonCallback?(process.env.CAMPUSDESK_QQ_CALLBACK_TOKEN||app.token):app.token,debug:false});
   const applied=await (await fetch('http://127.0.0.1:6099/api/OB11Config/SetConfig',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+login.data.Credential},body:JSON.stringify({config:JSON.stringify(settings)}),signal:AbortSignal.timeout(10000)})).json();
   if(applied.code!==0)throw Error('local_config_reload_failed');
-  app.account_id=account;
-  fs.writeFileSync('.private/config.json',JSON.stringify(app,null,2));
+  if(!pythonCallback){
+    app.account_id=account;
+    fs.writeFileSync('.private/config.json',JSON.stringify(app,null,2));
+  }
   console.log('Local OneBot API and event callback configured and hot-reloaded.');
 }
 main().catch(e=>{console.error(e.message);process.exitCode=1;});

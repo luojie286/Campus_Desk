@@ -10,6 +10,7 @@ const profiles = require('../src/documents/profile.cjs');
 async function main() {
   // 写入是不可逆的外部操作，必须显式带上 --yes 才执行。
   if (!process.argv.includes('--yes')) throw Error('refusing_to_write_without_--yes');
+  require('../src/business-owner.cjs').claimLegacy();
   const config = JSON.parse(fs.readFileSync('.private/config.json', 'utf8'));
   const store = openStore('.private/poc.sqlite');
   const profile = store.profile();

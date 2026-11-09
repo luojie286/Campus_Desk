@@ -13,11 +13,13 @@ export type SheetTaskRenderer = (task: Task, actions: SheetActions, busy: boolea
 
 const runningStates = new Set(['created', 'preparing', 'approved', 'executing', 'verifying']);
 
-export default function SheetWorkspace({request, renderTask}: {
+export default function SheetWorkspace({request, renderTask, todoId, initialTarget = ''}: {
   request: <T>(route: string, body?: unknown) => Promise<T>;
   renderTask: SheetTaskRenderer;
+  todoId?: number;
+  initialTarget?: string;
 }) {
-  const [target, setTarget] = useState('');
+  const [target, setTarget] = useState(initialTarget);
   const [items, setItems] = useState<Task[]>([]);
   const [task, setTask] = useState<Task>();
   const [busy, setBusy] = useState(false);
@@ -66,7 +68,7 @@ export default function SheetWorkspace({request, renderTask}: {
     <form onSubmit={event => {
       event.preventDefault();
       void run(async () => {
-        const created = await request<Task>(path, {target: target.trim(), clientRequestId: crypto.randomUUID()});
+        const created = await request<Task>(path, {target: target.trim(), clientRequestId: crypto.randomUUID(), todoId});
         setTarget(''); await open(created.id); await list();
       });
     }}>
@@ -82,7 +84,7 @@ export default function SheetWorkspace({request, renderTask}: {
     {task && renderTask(task, {
       approve: plan => action('approvals', {plan_id: plan.id, plan_version: plan.version, plan_digest: plan.digest,
         client_request_id: crypto.randomUUID()}),
-      answer: answers => action('answers', {answers}),
+      answer: answers => action('answers', {answers, task_version: task.state_version}),
       cancel: () => action('cancel'),
       reconcile: () => action('reconcile'),
       resume: () => action('resume')
