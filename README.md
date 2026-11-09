@@ -144,13 +144,17 @@ npm run desktop:build
 
 ### 使用桌面知识库与研究
 
-先按 [知识库配置与导入步骤](docs/setup.md#桌面知识库) 准备固定运行时。新环境用 `python -m campusdesk init` 初始化工作区；已有知识库按指南先备份再迁移。以下命令启动知识库服务，`--copy-token` 会把首次连接用的独立令牌复制到剪贴板。
+已有知识库可直接供 Python 工作台检索。新工作区可用 `python -m campusdesk init-knowledge` 初始化，再用 `python -m campusdesk import-knowledge <文件>` 预览导入，核对后加 `--approve <摘要>` 发布。
 
 ```powershell
-python -m campusdesk serve --copy-token
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\tools\start-python-workbench.ps1 -CopyToken
 ```
 
-保持服务窗口运行。在课桌侧栏打开「个人知识库」，首次粘贴令牌并连接。可以直接本机检索；使用模型问答或研究前，在资料列表审批模型处理权限。要使用手工填表可在启动时添加 `--sheets`，QQ 和早报分别使用 `--qq`、`--briefings`。启用填表前核对执行开关及已批准的任务。 [合并启动说明](docs/setup.md#桌面知识库)
+前两条创建隔离 Python 环境并安装依赖，第三条启动回环工作台。首次连接时，在桌面「个人知识库」粘贴 `-CopyToken` 复制的令牌。模型读取主机的 DeepSeek 配置和环境变量，先用 `python -m campusdesk knowledge-cloud <资料ID> allow` 或旧版资料管理审批对应资料的云端处理权限。
+
+QQ、手工填表和旧版资料管理从「旧版资料管理与工具」进入，按[合并启动说明](docs/setup.md#桌面知识库)独立启动原服务。
 
 ### 配置真实业务后启动
 

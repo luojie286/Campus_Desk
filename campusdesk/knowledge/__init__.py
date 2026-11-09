@@ -191,6 +191,30 @@ class FileKnowledge:
                     break
         return result
 
+    def research_sources(self, query: str, document_ids: tuple[str, ...]) -> list[Evidence]:
+        matches = self.search(query, document_ids)
+        if not document_ids:
+            return matches
+        found = {item.id: item for item in matches}
+        with closing(self._open()) as db:
+            db.execute("BEGIN")
+            owner = default_workspace(db)
+            sql = (SELECT + "FROM kb_chunks c " + FROM + self._visibility(db) +
+                   " AND r.id=d.rev AND d.id=? ORDER BY c.id LIMIT 3")
+            for document_id in document_ids:
+                for row in db.execute(sql, (owner, document_id)):
+                    if str(row["id"]) not in found and (item := self._evidence(row)):
+                        found[item.id] = item
+        return list(found.values())
+
+    def documents(self) -> list[dict]:
+        with closing(self._open()) as db:
+            owner = default_workspace(db)
+            return [dict(row) for row in db.execute(
+                "SELECT id,name,state AS status FROM kb_documents WHERE owner=? AND state='active' ORDER BY name,id LIMIT 500",
+                (owner,),
+            )]
+
     def evidence(self, evidence_id: int | str, revision: str | None = None) -> Evidence | None:
         with closing(self._open()) as db:
             db.execute("BEGIN")

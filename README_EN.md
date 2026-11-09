@@ -152,13 +152,17 @@ The first two commands install backend and desktop dependencies from their lockf
 
 ### Use desktop knowledge search and research
 
-Prepare the pinned runtime using the [knowledge base setup and import guide (Chinese)](docs/setup.md#桌面知识库). Run `python -m campusdesk init` for a new workspace, or follow the backup and migration steps for an existing database. The following command starts the local knowledge service. `--copy-token` copies the separate connection token for first use.
+The Python workbench can read an existing knowledge workspace. For a new workspace, run `python -m campusdesk init-knowledge`. Preview a file with `python -m campusdesk import-knowledge <file>`, then pass `--approve <digest>` to publish it.
 
 ```powershell
-python -m campusdesk serve --copy-token
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\tools\start-python-workbench.ps1 -CopyToken
 ```
 
-Keep the service terminal open. Open the knowledge base in the sidebar, paste the token, and connect. Approve model access to selected material for model Q&A or research. Add `--sheets` for spreadsheet preparation, `--qq` for QQ ingress, or `--briefings` for briefings. Review the execution setting and approved tasks before enabling spreadsheet workers. [Combined startup guide (Chinese)](docs/setup.md#桌面知识库)
+The first two commands create an isolated Python environment and install dependencies. The last command starts the loopback workbench and copies its token. Open the desktop knowledge base and paste the token to connect. Model calls use the host's DeepSeek configuration and environment. Use `python -m campusdesk knowledge-cloud <document-id> allow` or the legacy document manager to approve cloud processing for specific material.
+
+Open the legacy tools tab for QQ, manual spreadsheet preparation, and legacy document management. Start the legacy service separately using the [combined startup guide (Chinese)](docs/setup.md#桌面知识库).
 
 ### Configure real use before starting
 

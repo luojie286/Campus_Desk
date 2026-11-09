@@ -3,6 +3,7 @@ import {invoke} from '@tauri-apps/api/core';
 import {readCredentials} from '../api';
 import {isTauriApp} from '../secure';
 import Research from './Research';
+import PythonWorkspace from './PythonWorkspace';
 import SheetWorkspace from './SheetWorkspace';
 import type {SheetTaskRenderer} from './SheetWorkspace';
 import type {EffortPresets} from './Research';
@@ -68,9 +69,25 @@ type TodoItem = {id: number; title: string; admitted: number};
 type Field = {key: string; value: string};
 const profileLabels: Record<string, string> = {name: '姓名', student_id: '学号', sex: '性别', age: '年龄', major: '专业', phone: '电话', email: '邮箱'};
 
-export default function Assistant({candidate, onCandidateDone, renderSheetTask}: {
+type AssistantProps = {
   candidate?: number; onCandidateDone?: () => void; renderSheetTask: SheetTaskRenderer;
-}) {
+};
+
+export default function Assistant(props: AssistantProps) {
+  const [legacy, setLegacy] = useState(false);
+  const showLegacy = legacy || props.candidate !== undefined;
+  return <div className="stack">
+    <div className="assistant-actions">
+      <button className="button" type="button" disabled={!showLegacy} onClick={() => {
+        props.onCandidateDone?.(); setLegacy(false);
+      }}>Python 知识工作台</button>
+      <button className="button" type="button" disabled={showLegacy} onClick={() => setLegacy(true)}>旧版资料管理与工具</button>
+    </div>
+    {showLegacy ? <LegacyAssistant {...props} /> : <PythonWorkspace />}
+  </div>;
+}
+
+function LegacyAssistant({candidate, onCandidateDone, renderSheetTask}: AssistantProps) {
   const [token, setToken] = useState(browserToken);
   const [tokenDraft, setTokenDraft] = useState('');
   const [models, setModels] = useState<Model[]>([]);

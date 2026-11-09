@@ -164,6 +164,7 @@ async function main() {
       await page.getByRole('button', {name: '关闭详情', exact: true}).click();
     }
     await page.getByRole('button', {name: '个人知识库', exact: true}).click();
+    await page.getByRole('button', {name: '旧版资料管理与工具', exact: true}).click();
     await page.getByLabel('独立知识库令牌').fill('synthetic-readme-assistant');
     await page.getByRole('button', {name: '连接', exact: true}).click();
     await page.getByLabel('使用模型整理已授权资料', {exact: true}).check();

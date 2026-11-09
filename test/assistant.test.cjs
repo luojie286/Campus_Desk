@@ -327,6 +327,7 @@ test('M1 desktop: import approval and local citation from the built workbench',
     await page.route('**/api/v1/assistant/**', relay);
     await page.goto('http://127.0.0.1:' + server.address().port);
     await page.getByRole('button', { name: '个人知识库', exact: true }).click();
+    await page.getByRole('button', { name: '旧版资料管理与工具', exact: true }).click();
     await page.getByLabel('独立知识库令牌').fill(token);
     await page.getByRole('button', { name: '连接', exact: true }).click();
     await page.getByRole('button', { name: f.source, exact: true }).click();
@@ -383,6 +384,7 @@ test('M1 desktop: import approval and local citation from the built workbench',
     await page.route('**/api/v1/assistant/**', relay);
     await page.goto('http://127.0.0.1:' + server.address().port);
     await page.getByRole('button', { name: '个人知识库', exact: true }).click();
+    await page.getByRole('button', { name: '旧版资料管理与工具', exact: true }).click();
     await page.getByLabel('独立知识库令牌').fill(token);
     await page.getByRole('button', { name: '连接', exact: true }).click();
     await page.getByRole('button', { name: 'Deeper Research', exact: true }).click();

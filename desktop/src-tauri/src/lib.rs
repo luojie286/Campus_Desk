@@ -57,6 +57,32 @@ fn delete_assistant_token() -> Result<(), String> {
     }
 }
 
+fn workbench_entry() -> Result<Entry, String> {
+    Entry::new(KEYRING_SERVICE, "python-workbench-token").map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn save_workbench_token(token: String) -> Result<(), String> {
+    workbench_entry()?.set_password(&token).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn get_workbench_token() -> Result<Option<String>, String> {
+    match workbench_entry()?.get_password() {
+        Ok(token) => Ok(Some(token)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[tauri::command]
+fn delete_workbench_token() -> Result<(), String> {
+    match workbench_entry()?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -66,7 +92,10 @@ pub fn run() {
             delete_api_token,
             save_assistant_token,
             get_assistant_token,
-            delete_assistant_token
+            delete_assistant_token,
+            save_workbench_token,
+            get_workbench_token,
+            delete_workbench_token
         ])
         .run(tauri::generate_context!())
         .expect("error while running campus desk");

@@ -121,9 +121,14 @@ def main() -> None:
         try:
             import uvicorn
             from .knowledge_api import create_app
+            from .models import load_models
         except ImportError as error:
             raise WorkspaceError("knowledge_dependencies_missing") from error
-        uvicorn.run(create_app(root, token), host="127.0.0.1", port=args.port, access_log=False)
+        try:
+            models = load_models(root)
+        except (KeyError, TypeError, AttributeError, OSError, ValueError) as error:
+            raise WorkspaceError("invalid_model_config") from error
+        uvicorn.run(create_app(root, token, models=models), host="127.0.0.1", port=args.port, access_log=False)
         return
     else:
         if root != PROJECT:

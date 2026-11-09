@@ -10,7 +10,7 @@ import stat
 from tempfile import NamedTemporaryFile
 from uuid import uuid4
 
-from . import FileKnowledge, MAX_FILE_BYTES, matches_digest, relative_parts, terms
+from . import Evidence, FileKnowledge, MAX_FILE_BYTES, matches_digest, relative_parts, terms
 from .parsing import chunks
 from ..workspace import SCHEMA, WorkspaceError, default_workspace
 
@@ -164,3 +164,39 @@ def import_file(root: Path, source: Path, approval: str | None = None) -> dict:
                                (revision, locator, text)).lastrowid
             db.execute("INSERT INTO kb_fts(rowid,terms) VALUES (?,?)", (chunk, " ".join(terms(text))))
     return {"document_id": document, "revision": revision, "unchanged": False}
+
+
+def publish_note(root: Path, name: str, text: str, document: str, sources: list[Evidence]) -> dict:
+    """Publish an approved generated report without creating an external source file."""
+    if relative_parts(name) != (name,) or not name.lower().endswith(".md") or len(name) > 120:
+        raise WorkspaceError("invalid_report_name")
+    data = text.encode()
+    blocks = chunks(name, data)
+    digest = sha256(data).hexdigest()
+    knowledge = FileKnowledge(root)
+    object_name = digest + ".md"
+    with closing(sqlite3.connect(knowledge.database.absolute().as_uri() + "?mode=rw", uri=True)) as db, db:
+        db.execute("BEGIN IMMEDIATE")
+        owner = default_workspace(db)
+        if not owner:
+            raise WorkspaceError("knowledge_workspace_required")
+        # Serialize publication with SQLite permission changes. The write
+        # reservation lets the evidence reader see the last committed snapshot.
+        if any(knowledge.evidence(item.id) != item for item in sources):
+            raise WorkspaceError("preview_changed")
+        existing = db.execute(
+            "SELECT d.id,d.rev,r.digest FROM kb_documents d JOIN kb_revisions r ON r.id=d.rev "
+            "WHERE d.owner=? AND d.root IS NULL AND d.name=? AND d.state='active'", (owner, name),
+        ).fetchone()
+        if existing:
+            if existing[0] == document and existing[2] == digest:
+                return {"document_id": document, "revision": existing[1]}
+            raise WorkspaceError("report_name_exists")
+        publish_object(knowledge.storage, object_name, data, digest)
+        revision = str(uuid4())
+        db.execute("INSERT INTO kb_documents VALUES (?,?,NULL,?,?,'active')", (document, owner, name, revision))
+        db.execute("INSERT INTO kb_revisions VALUES (?,?,?,?)", (revision, document, digest, "objects/" + object_name))
+        for locator, body in blocks:
+            chunk = db.execute("INSERT INTO kb_chunks(rev,locator,body) VALUES (?,?,?)", (revision, locator, body)).lastrowid
+            db.execute("INSERT INTO kb_fts(rowid,terms) VALUES (?,?)", (chunk, " ".join(terms(body))))
+    return {"document_id": document, "revision": revision}

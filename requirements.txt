@@ -4,3 +4,4 @@ regex
 pypdfium2
 python-docx
 Pillow
+httpx>=0.28,<1

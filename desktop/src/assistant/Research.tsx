@@ -6,7 +6,7 @@ export type EffortPresets = Record<Preset, Limits>;
 type Model = {id: string; label: string};
 type Source = {id: string; name: string; status: string};
 type Agent = {id: string; modelId: string; prompt: string};
-type Evidence = {id: string; title: string; locator: string; quote: string};
+type Evidence = {id: string; title: string; locator: string; quote: string; revision?: string};
 type Artifact = {id: string; seq: number; round: number; phase: string; agentId: string; modelId: string;
   data: {answer?: string; finding?: string; proposed_revision?: string; reason?: string; preferred?: string; gaps?: string[]; disagreements?: string[]}};
 type Snapshot = {
@@ -27,7 +27,9 @@ const labels: Record<string, string> = {
   activeMs: '有效运行时长（毫秒）', source_changed: '来源或授权已变化',
   all_agents_failed: '所有参与者失败', no_improvement: '连续评估未改善', no_result: '暂无可交付结果',
   review_unavailable: '缺少独立复核', model_failed: '模型请求失败', model_unavailable: '模型不可用',
-  invalid_research_response: '模型响应格式或引用无效', usage_overrun: '实际用量超过预留'
+  model_timeout: '模型请求超时', context_limit: '资料超过模型上下文限制',
+  invalid_model_output: '模型响应无法读取', invalid_research_response: '模型响应格式或引用无效',
+  usage_overrun: '实际用量超过预留'
 };
 
 function limitFields(value: Limits, change: (next: Limits) => void) {
@@ -36,13 +38,14 @@ function limitFields(value: Limits, change: (next: Limits) => void) {
   </label>);
 }
 
-export default function Research({request, models, sources, presets, save, pendingPreview}: {
+export default function Research({request, models, sources, presets, save, pendingPreview, recheckCompleted = false}: {
   request: <T>(route: string, body?: unknown) => Promise<T>;
   models: Model[];
   sources: Source[];
   presets: EffortPresets;
   save: (id: string, name: string, includeProcess: boolean) => Promise<void>;
   pendingPreview: boolean;
+  recheckCompleted?: boolean;
 }) {
   const [question, setQuestion] = useState('');
   const [criteria, setCriteria] = useState('');
@@ -87,14 +90,17 @@ export default function Research({request, models, sources, presets, save, pendi
   }, [request]);
 
   useEffect(() => {
-    if (!task || !['running', 'paused'].includes(task.state)) return;
+    if (!task || (!recheckCompleted && !['queued', 'running', 'paused'].includes(task.state))) return;
     let mounted = true;
     let loading = false;
     const timer = window.setInterval(() => {
       if (loading) return;
       loading = true;
       void request<Snapshot>('/research/' + task.id).then(current => {
-        if (mounted) setTask(old => old?.id === current.id && old.seq <= current.seq ? current : old);
+        if (mounted) {
+          setTask(old => old?.id === current.id && old.seq <= current.seq ? current : old);
+          if (!current.sourceCount) { setReference(undefined); setProcess([]); setNext(0); }
+        }
       }).catch(error => {
         if (!mounted) return;
         if (error.message === 'session_expired') {
@@ -102,9 +108,9 @@ export default function Research({request, models, sources, presets, save, pendi
           setNotice('后台研究会话已释放。');
         } else setNotice(error.message);
       }).finally(() => { loading = false; });
-    }, 700);
+    }, ['queued', 'running'].includes(task.state) ? 700 : 3000);
     return () => { mounted = false; window.clearInterval(timer); };
-  }, [task?.id, task?.state, request]);
+  }, [task?.id, task?.state, request, recheckCompleted]);
 
   async function run(work: () => Promise<void>) {
     setBusy(true); setNotice('');
@@ -221,7 +227,8 @@ export default function Research({request, models, sources, presets, save, pendi
           {task.result.gaps.map((gap, i) => <p key={i}>待解决 · {gap}</p>)}
           {task.result.disagreements.map((item, i) => <p key={i}>分歧 · {item}</p>)}
           {task.result.evidence.map(item => <button key={item.id} className="button assistant-source" onClick={() =>
-            void run(async () => setReference(await request<Evidence>('/evidence/' + item.id)))}>{item.title} · {item.locator}</button>)}
+            void run(async () => setReference(await request<Evidence>('/evidence/' + item.id +
+              (recheckCompleted && item.revision ? '?revision=' + encodeURIComponent(item.revision) : ''))))}>{item.title} · {item.locator}</button>)}
           {reference && <p className="assistant-text">{reference.quote}</p>}
           <form onSubmit={event => {event.preventDefault(); void run(() => save(task.id, filename, includeProcess));}}>
             <label>报告文件名<input value={filename} onChange={event => setFilename(event.target.value)} /></label>
