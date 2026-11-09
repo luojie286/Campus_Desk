@@ -55,6 +55,18 @@ def parse_args():
     serve.add_argument("--qq", action="store_true")
     serve.add_argument("--sheets", action="store_true")
     serve.add_argument("--briefings", action="store_true")
+    knowledge = commands.add_parser("serve-knowledge", help="启动 Python 知识库只读 API")
+    knowledge.add_argument("--port", type=int, default=9089)
+    commands.add_parser("init-knowledge", help="初始化独立 Python 知识工作区")
+    import_knowledge = commands.add_parser("import-knowledge", help="预览或批准导入一个本机文件")
+    import_knowledge.add_argument("source", type=Path)
+    import_knowledge.add_argument("--approve", metavar="DIGEST")
+    admission = commands.add_parser("admit-knowledge-todo", help="预览或批准纳入现有待办来源")
+    admission.add_argument("todo_id", type=int)
+    admission.add_argument("--approve", metavar="DIGEST")
+    cloud = commands.add_parser("knowledge-cloud", help="变更资料的云端模型处理许可")
+    cloud.add_argument("target")
+    cloud.add_argument("decision", choices=("allow", "revoke"))
     return parser.parse_args()
 
 
@@ -82,6 +94,36 @@ def main() -> None:
     elif args.command == "import-notes":
         extra = [args.digest] if args.digest is not None else []
         node_entry(root, "tools/import-notes.cjs", args.action, args.source, args.exclude, *extra)
+        return
+    elif args.command in ("init-knowledge", "import-knowledge"):
+        try:
+            from .knowledge.importing import import_file, initialize
+        except ImportError as error:
+            raise WorkspaceError("knowledge_dependencies_missing") from error
+        if args.command == "init-knowledge":
+            result = initialize(root)
+        else:
+            result = import_file(root, args.source, args.approve)
+    elif args.command == "admit-knowledge-todo":
+        from .knowledge.admission import admit_todo
+        if not 1 <= args.todo_id < 2**63:
+            raise WorkspaceError("invalid_todo_id")
+        result = admit_todo(root, args.todo_id, args.approve)
+    elif args.command == "knowledge-cloud":
+        from .knowledge.permissions import set_cloud_permission
+        result = set_cloud_permission(root, args.target, args.decision == "allow")
+    elif args.command == "serve-knowledge":
+        if not 1 <= args.port <= 65535:
+            raise WorkspaceError("knowledge_port_invalid")
+        token = os.environ.get("CAMPUSDESK_KNOWLEDGE_TOKEN", "")
+        if len(token) < 32:
+            raise WorkspaceError("knowledge_token_required")
+        try:
+            import uvicorn
+            from .knowledge_api import create_app
+        except ImportError as error:
+            raise WorkspaceError("knowledge_dependencies_missing") from error
+        uvicorn.run(create_app(root, token), host="127.0.0.1", port=args.port, access_log=False)
         return
     else:
         if root != PROJECT:

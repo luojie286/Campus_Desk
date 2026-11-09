@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+regex
+pypdfium2
+python-docx
+Pillow
