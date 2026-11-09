@@ -11,6 +11,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field, StringConstraints
 
 from .knowledge import Evidence, FileKnowledge
+from .interaction import answer_routes
+from .llm import AnswerModel, GroundedAnswers
 
 DocumentId = Annotated[str, StringConstraints(min_length=1, max_length=128)]
 
@@ -20,7 +22,7 @@ class SearchRequest(BaseModel):
     document_ids: list[DocumentId] = Field(default_factory=list, max_length=16)
 
 
-def create_app(root: Path, token: str) -> FastAPI:
+def create_app(root: Path, token: str, *, model: AnswerModel | None = None) -> FastAPI:
     if len(token) < 32:
         raise ValueError("knowledge_token_required")
     bearer = HTTPBearer(auto_error=False)
@@ -53,4 +55,5 @@ def create_app(root: Path, token: str) -> FastAPI:
             raise HTTPException(404, "evidence_not_found")
         return item
 
+    app.include_router(answer_routes(GroundedAnswers(knowledge, model)), dependencies=[Depends(authorize)])
     return app
